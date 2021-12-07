@@ -95,3 +95,4 @@ if ($install) {
     }
     WriteInfo("Build finished")
 }
+sccache -s
