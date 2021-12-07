@@ -39,8 +39,7 @@ if (-not (Test-Path "taichi_clang")) {
     curl.exe --retry 10 --retry-delay 5 https://github.com/taichi-dev/taichi_assets/releases/download/llvm10/clang-10.0.0-win.zip -LO
     7z x clang-10.0.0-win.zip -otaichi_clang
 }
-$env:PATH = "$libsDir\taichi_llvm\bin;$libsDir\taichi_clang\bin;$env:PATH"
-$env:TAICHI_CMAKE_ARGS = "-G 'Visual Studio 16 2019' -A x64 -DLLVM_DIR=$libsDir\taichi_llvm\lib\cmake\llvm"
+$env:TAICHI_CMAKE_ARGS = "-DLLVM_DIR=$libsDir\taichi_llvm\lib\cmake\llvm -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER=clang"
 if ($installVulkan) {
     WriteInfo("Download and install Vulkan")
     if (-not (Test-Path "VulkanSDK.exe")) {
@@ -63,7 +62,8 @@ python -m pip install wheel
 python -m pip install -r requirements_dev.txt
 python -m pip install -r requirements_test.txt
 WriteInfo("Building Taichi")
-$env:CXX = "$libsDir\taichi_clang\bin\clang++.exe"
+$env:CLANG_EXECUTABLE = "$libsDir\taichi_clang\bin\clang++.exe"
+$env:LLVM_AS_EXECUTABLE = "$libsDir\taichi_llvm\bin\llvm-as.exe"
 if ($install) {
     if ($develop) {
         python -m pip install -v -e .
