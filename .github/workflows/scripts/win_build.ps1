@@ -15,10 +15,10 @@ function WriteInfo($text) {
 }
 
 # Get sccache
-$env:SCCACHE_DIR=${pwd}/sccache_cache
+$env:SCCACHE_DIR="${pwd}/sccache_cache"
 $env:SCCACHE_CACHE_SIZE="128M"
-$env:SCCACHE_LOG=error
-$env:SCCACHE_ERROR_LOG=${pwd}/sccache_error.log
+$env:SCCACHE_LOG="error"
+$env:SCCACHE_ERROR_LOG="${pwd}/sccache_error.log"
 md "$SCCACHE_DIR" -ea 0
 WriteInfo("sccache dir: $SCCACHE_DIR")
 if (-not (Test-Path "sccache-v0.2.15-x86_64-pc-windows-msvc")) {
@@ -26,6 +26,7 @@ if (-not (Test-Path "sccache-v0.2.15-x86_64-pc-windows-msvc")) {
     tar -xzf sccache-v0.2.15-x86_64-pc-windows-msvc.tar.gz
     $env:PATH += ";${pwd}/sccache-v0.2.15-x86_64-pc-windows-msvc"
 }
+sccache -s
 
 # WriteInfo("Install 7Zip")
 # Install-Module 7Zip4PowerShell -Force -Verbose -Scope CurrentUser
