@@ -54,7 +54,7 @@ if (-not (Test-Path "taichi_clang")) {
     7z x clang-10.0.0-win.zip -otaichi_clang
 }
 $env:LLVM_DIR = "$libsDir\taichi_llvm"
-$env:TAICHI_CMAKE_ARGS = "-DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER=clang"
+$env:TAICHI_CMAKE_ARGS = "-DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_C_COMPILER=clang-cl"
 $env:TAICHI_CMAKE_ARGS += " -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache"
 $env:TAICHI_CMAKE_ARGS += " -DCMAKE_VERBOSE_MAKEFILE:BOOL=ON"
 if ($installVulkan) {
