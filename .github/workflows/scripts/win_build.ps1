@@ -14,8 +14,8 @@ function WriteInfo($text) {
     Write-Host -ForegroundColor Green "[BUILD] $text"
 }
 
-WriteInfo("Install 7Zip")
-Install-Module 7Zip4PowerShell -Force -Verbose -Scope CurrentUser
+# WriteInfo("Install 7Zip")
+# Install-Module 7Zip4PowerShell -Force -Verbose -Scope CurrentUser
 
 if ($clone) {
     WriteInfo("Clone the repository")
