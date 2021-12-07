@@ -19,8 +19,8 @@ $env:SCCACHE_DIR="${pwd}/sccache_cache"
 $env:SCCACHE_CACHE_SIZE="128M"
 $env:SCCACHE_LOG="error"
 $env:SCCACHE_ERROR_LOG="${pwd}/sccache_error.log"
-md "$SCCACHE_DIR" -ea 0
-WriteInfo("sccache dir: $SCCACHE_DIR")
+WriteInfo("sccache dir: $Env:SCCACHE_DIR")
+md "$Env:SCCACHE_DIR" -ea 0
 if (-not (Test-Path "sccache-v0.2.15-x86_64-pc-windows-msvc")) {
     curl.exe --retry 10 --retry-delay 5 https://github.com/mozilla/sccache/releases/download/v0.2.15/sccache-v0.2.15-x86_64-pc-windows-msvc.tar.gz -LO
     tar -xzf sccache-v0.2.15-x86_64-pc-windows-msvc.tar.gz
