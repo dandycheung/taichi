@@ -78,8 +78,8 @@ python -m pip install wheel
 python -m pip install -r requirements_dev.txt
 python -m pip install -r requirements_test.txt
 WriteInfo("Building Taichi")
-$env:TAICHI_CMAKE_ARGS += " -DCLANG_EXECUTABLE=$libsDir\taichi_clang\bin\clang++.exe"
-$env:TAICHI_CMAKE_ARGS += " -DLLVM_AS_EXECUTABLE=$libsDir\taichi_llvm\bin\llvm-as.exe"
+$env:TAICHI_CMAKE_ARGS += " -DCLANG_EXECUTABLE=$libsDir\\taichi_clang\\bin\\clang++.exe"
+$env:TAICHI_CMAKE_ARGS += " -DLLVM_AS_EXECUTABLE=$libsDir\\taichi_llvm\\bin\\llvm-as.exe"
 if ($install) {
     if ($develop) {
         python -m pip install -v -e .
