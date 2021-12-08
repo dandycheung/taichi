@@ -372,13 +372,8 @@ if (MSVC)
 endif ()
 
 if (WIN32)
-    if (MSVC)
-        set_target_properties(${CORE_WITH_PYBIND_LIBRARY_NAME} PROPERTIES RUNTIME_OUTPUT_DIRECTORY
-                "${CMAKE_CURRENT_SOURCE_DIR}/runtimes")
-    else ()
-        set_target_properties(${CORE_WITH_PYBIND_LIBRARY_NAME} PROPERTIES RUNTIME_OUTPUT_DIRECTORY
-                "${CMAKE_CURRENT_SOURCE_DIR}/runtimes/Release")
-    endif ()
+    set_target_properties(${CORE_WITH_PYBIND_LIBRARY_NAME} PROPERTIES RUNTIME_OUTPUT_DIRECTORY
+        "${CMAKE_CURRENT_SOURCE_DIR}/runtimes")
 endif ()
 
 
