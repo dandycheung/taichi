@@ -28,9 +28,6 @@ if (-not (Test-Path "sccache-v0.2.15-x86_64-pc-windows-msvc")) {
 }
 sccache -s
 
-# WriteInfo("Install 7Zip")
-# Install-Module 7Zip4PowerShell -Force -Verbose -Scope CurrentUser
-
 if ($clone) {
     WriteInfo("Clone the repository")
     git clone --recurse-submodules $RepoURL
@@ -56,7 +53,7 @@ if (-not (Test-Path "taichi_clang")) {
 $env:LLVM_DIR = "$libsDir\taichi_llvm"
 $env:TAICHI_CMAKE_ARGS = "-DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_C_COMPILER=clang-cl"
 $env:TAICHI_CMAKE_ARGS += " -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache"
-$env:TAICHI_CMAKE_ARGS += " -DCMAKE_VERBOSE_MAKEFILE:BOOL=ON"
+
 if ($installVulkan) {
     WriteInfo("Download and install Vulkan")
     if (-not (Test-Path "VulkanSDK.exe")) {
