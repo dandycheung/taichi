@@ -41,8 +41,7 @@ runtimes/libtaichi_python*
 .pypirc
 dist/
 python/MANIFEST
-build/
-build_clang_tidy/
+build*/
 bin/
 tmp/
 cmake-build-*
@@ -58,6 +57,7 @@ __pycache__
 !docs/**/*.jpg
 !docs/**/*.png
 !tests/python/expected/*.png
+!python/taichi/examples/algorithm/circle-packing/*.png
 *.egg-info
 .tlang_cache
 /taichi/common/version.h
@@ -88,3 +88,5 @@ imgui.ini
 /_skbuild/
 .cache
 .do-not-clean
+*.dylib
+*.ply

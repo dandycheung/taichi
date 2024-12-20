@@ -4,7 +4,7 @@
 #include <thread>
 #include <unordered_map>
 
-// #include "taichi/ir/analysis.h"
+#include "taichi/ir/analysis.h"
 #include "taichi/ir/statements.h"
 #include "taichi/ir/transforms.h"
 
@@ -43,6 +43,14 @@ IRNode *IRNode::get_ir_root() {
   return node;
 }
 
+const IRNode *IRNode::get_ir_root() const {
+  auto node = this;
+  while (node->get_parent()) {
+    node = node->get_parent();
+  }
+  return node;
+}
+
 std::unique_ptr<IRNode> IRNode::clone() {
   std::unique_ptr<IRNode> new_irnode;
   if (is<Block>())
@@ -52,7 +60,6 @@ std::unique_ptr<IRNode> IRNode::clone() {
   else {
     TI_NOT_IMPLEMENTED
   }
-  new_irnode->kernel = kernel;
   return new_irnode;
 }
 
@@ -62,10 +69,8 @@ class StatementTypeNameVisitor : public IRVisitor {
   StatementTypeNameVisitor() {
   }
 
-#define PER_STATEMENT(x)         \
-  void visit(x *stmt) override { \
-    type_name = #x;              \
-  }
+#define PER_STATEMENT(x) \
+  void visit(x *stmt) override { type_name = #x; }
 #include "taichi/inc/statements.inc.h"
 
 #undef PER_STATEMENT
@@ -123,8 +128,27 @@ Stmt::Stmt(const Stmt &stmt) : field_manager(this), fields_registered(false) {
   instance_id = instance_id_counter++;
   id = instance_id;
   erased = stmt.erased;
-  tb = stmt.tb;
+  dbg_info = stmt.dbg_info;
   ret_type = stmt.ret_type;
+}
+
+Stmt::Stmt(const DebugInfo &dbg_info) : Stmt() {
+  this->dbg_info = dbg_info;
+}
+
+Callable *Stmt::get_callable() const {
+  Block *parent_block = parent;
+  if (parent_block->parent_callable()) {
+    return parent_block->parent_callable();
+  }
+
+  if (parent_block->parent_stmt()) {
+    return parent_block->parent_stmt()->get_callable();
+  }
+  irpass::print((IRNode *)this);
+
+  TI_WARN("Stmt is not in a kernel.");
+  return nullptr;
 }
 
 Stmt *Stmt::insert_before_me(std::unique_ptr<Stmt> &&new_stmt) {
@@ -177,6 +201,39 @@ std::string Stmt::type() {
 
 IRNode *Stmt::get_parent() const {
   return parent;
+}
+
+std::string Stmt::get_last_tb() const {
+  const auto *callable = get_callable();
+  const auto callable_name = callable ? callable->get_name() : "";
+
+  std::string prefix =
+      !callable_name.empty() ? "While compiling `" + callable_name + "`, " : "";
+
+  const auto &tb = dbg_info.tb;
+  if (tb.empty()) {
+    // If has no tb, try to find tb from the immediate previous statement
+    if (parent) {
+      auto it_this = std::find_if(
+          parent->statements.rbegin(), parent->statements.rend(),
+          [this](const pStmt &stmt) { return stmt.get() == this; });
+
+      while (it_this != parent->statements.rend()) {
+        const auto &stmt = *it_this;
+        if (!stmt->get_tb().empty()) {
+          return prefix + stmt->get_tb();
+        }
+        ++it_this;
+      }
+    }
+
+    const auto stmt_type_name = typeid(*this).name();
+
+    return fmt::format("{}Statement {} (type={});\n", prefix, name(),
+                       cpp_demangle(stmt_type_name));
+  }
+
+  return prefix + tb;
 }
 
 std::vector<Stmt *> Stmt::get_operands() const {
@@ -353,19 +410,37 @@ void Block::replace_with(Stmt *old_statement,
     *iter = std::move(new_statements[0]);
     (*iter)->parent = this;
   } else {
-    statements.erase(iter);
+    iter = statements.erase(iter);
     insert_at(std::move(new_statements), iter);
   }
 }
 
+Stmt *Block::parent_stmt() const {
+  auto ptr = std::get_if<Stmt *>(&parent_);
+  return ptr == nullptr ? nullptr : *ptr;
+}
+
+Callable *Block::parent_callable() const {
+  auto ptr = std::get_if<Callable *>(&parent_);
+  return ptr == nullptr ? nullptr : *ptr;
+}
+
+void Block::set_parent_callable(Callable *callable) {
+  parent_ = callable;
+}
+
+void Block::set_parent_stmt(Stmt *stmt) {
+  parent_ = stmt;
+}
+
 Block *Block::parent_block() const {
-  if (parent_stmt == nullptr)
+  if (parent_stmt() == nullptr)
     return nullptr;
-  return parent_stmt->parent;
+  return parent_stmt()->parent;
 }
 
 IRNode *Block::get_parent() const {
-  return parent_stmt;
+  return parent_stmt();
 }
 
 bool Block::has_container_statements() {
@@ -398,7 +473,7 @@ stmt_vector::iterator Block::find(Stmt *stmt) {
 
 std::unique_ptr<Block> Block::clone() const {
   auto new_block = std::make_unique<Block>();
-  new_block->parent_stmt = parent_stmt;
+  new_block->parent_ = parent_;
   new_block->stop_gradients = stop_gradients;
   new_block->statements.reserve(size());
   for (auto &stmt : statements)
@@ -407,6 +482,7 @@ std::unique_ptr<Block> Block::clone() const {
 }
 
 DelayedIRModifier::~DelayedIRModifier() {
+  // TODO: destructors should not be interrupted
   TI_ASSERT(to_insert_before_.empty());
   TI_ASSERT(to_insert_after_.empty());
   TI_ASSERT(to_erase_.empty());
@@ -493,6 +569,18 @@ bool DelayedIRModifier::modify_ir() {
 
 void DelayedIRModifier::mark_as_modified() {
   modified_ = true;
+}
+
+ImmediateIRModifier::ImmediateIRModifier(IRNode *root) {
+  stmt_usages_ = irpass::analysis::gather_statement_usages(root);
+}
+
+void ImmediateIRModifier::replace_usages_with(Stmt *old_stmt, Stmt *new_stmt) {
+  if (stmt_usages_.find(old_stmt) == stmt_usages_.end())
+    return;
+  for (auto &[usage, i] : stmt_usages_.at(old_stmt)) {
+    usage->set_operand(i, new_stmt);
+  }
 }
 
 }  // namespace taichi::lang

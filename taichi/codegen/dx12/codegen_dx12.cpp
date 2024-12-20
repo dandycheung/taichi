@@ -10,7 +10,6 @@
 #include "taichi/program/program.h"
 #include "taichi/ir/ir.h"
 #include "taichi/ir/statements.h"
-#include "taichi/util/statistics.h"
 #include "taichi/ir/transforms.h"
 #include "taichi/ir/analysis.h"
 #include "taichi/analysis/offline_cache_util.h"
@@ -22,8 +21,12 @@ class TaskCodeGenLLVMDX12 : public TaskCodeGenLLVM {
  public:
   using IRVisitor::visit;
 
-  TaskCodeGenLLVMDX12(Kernel *kernel, IRNode *ir)
-      : TaskCodeGenLLVM(kernel, ir, nullptr) {
+  TaskCodeGenLLVMDX12(int id,
+                      const CompileConfig &config,
+                      TaichiLLVMContext &tlctx,
+                      const Kernel *kernel,
+                      IRNode *ir)
+      : TaskCodeGenLLVM(id, config, tlctx, kernel, ir, nullptr) {
     TI_AUTO_PROF
   }
 
@@ -92,11 +95,7 @@ class TaskCodeGenLLVMDX12 : public TaskCodeGenLLVM {
         builder->SetInsertPoint(loop_test_bb);
         auto cond = builder->CreateICmp(
             llvm::CmpInst::Predicate::ICMP_SLT,
-            builder->CreateLoad(
-#ifdef TI_LLVM_15
-                i32_ty,
-#endif
-                loop_index),
+            builder->CreateLoad(i32_ty, loop_index),
             llvm_val[stmt->owned_num_local.find(stmt->major_from_type)
                          ->second]);
         builder->CreateCondBr(cond, loop_body_bb, func_exit);
@@ -109,13 +108,10 @@ class TaskCodeGenLLVMDX12 : public TaskCodeGenLLVM {
           auto &s = stmt->body->statements[i];
           s->accept(this);
         }
-        builder->CreateStore(builder->CreateAdd(builder->CreateLoad(
-#ifdef TI_LLVM_15
-                                                    i32_ty,
-#endif
-                                                    loop_index),
-                                                block_dim),
-                             loop_index);
+        builder->CreateStore(
+            builder->CreateAdd(builder->CreateLoad(i32_ty, loop_index),
+                               block_dim),
+            loop_index);
         builder->CreateBr(loop_test_bb);
         builder->SetInsertPoint(func_exit);
       }
@@ -151,15 +147,13 @@ class TaskCodeGenLLVMDX12 : public TaskCodeGenLLVM {
   }
 
   void visit(OffloadedStmt *stmt) override {
-    stat.add("codegen_offloaded_tasks");
     TI_ASSERT(current_offload == nullptr);
     current_offload = stmt;
     if (stmt->bls_size > 0)
       create_bls_buffer(stmt);
     using Type = OffloadedStmt::TaskType;
     auto offloaded_task_name = init_offloaded_task_function(stmt);
-    if (prog->this_thread_config().kernel_profiler &&
-        arch_is_cpu(prog->this_thread_config().arch)) {
+    if (compile_config.kernel_profiler && arch_is_cpu(compile_config.arch)) {
       call(
           builder.get(), "LLVMRuntime_profiler_start",
           {get_runtime(), builder->CreateGlobalStringPtr(offloaded_task_name)});
@@ -181,8 +175,7 @@ class TaskCodeGenLLVMDX12 : public TaskCodeGenLLVM {
     } else {
       TI_NOT_IMPLEMENTED
     }
-    if (prog->this_thread_config().kernel_profiler &&
-        arch_is_cpu(prog->this_thread_config().arch)) {
+    if (compile_config.kernel_profiler && arch_is_cpu(compile_config.arch)) {
       llvm::IRBuilderBase::InsertPointGuard guard(*builder);
       builder->SetInsertPoint(final_block);
       call(builder.get(), "LLVMRuntime_profiler_stop", {get_runtime()});
@@ -202,6 +195,13 @@ class TaskCodeGenLLVMDX12 : public TaskCodeGenLLVM {
       TI_NOT_IMPLEMENTED
     }
   }
+
+ private:
+  std::tuple<llvm::Value *, llvm::Value *> get_spmd_info() override {
+    auto thread_idx = tlctx->get_constant(0);
+    auto block_dim = tlctx->get_constant(1);
+    return std::make_tuple(thread_idx, block_dim);
+  }
 };
 
 }  // namespace
@@ -210,7 +210,8 @@ class TaskCodeGenLLVMDX12 : public TaskCodeGenLLVM {
 
 static std::vector<uint8_t> generate_dxil_from_llvm(
     LLVMCompiledTask &compiled_data,
-    taichi::lang::Kernel *kernel) {
+    const CompileConfig &config,
+    const taichi::lang::Kernel *kernel) {
   // generate dxil from llvm ir.
   auto offloaded_local = compiled_data.tasks;
   auto module = compiled_data.module.get();
@@ -218,50 +219,50 @@ static std::vector<uint8_t> generate_dxil_from_llvm(
     llvm::Function *func = module->getFunction(task.name);
     TI_ASSERT(func);
     directx12::mark_function_as_cs_entry(func);
-    directx12::set_num_threads(
-        func, kernel->program->this_thread_config().default_gpu_block_dim, 1,
-        1);
+    directx12::set_num_threads(func, config.default_gpu_block_dim, 1, 1);
     // FIXME: save task.block_dim like
     // tlctx->mark_function_as_cuda_kernel(func, task.block_dim);
   }
-  auto dx_container = directx12::global_optimize_module(
-      module, kernel->program->this_thread_config());
+  auto dx_container = directx12::global_optimize_module(module, config);
   // validate and sign dx container.
   return directx12::validate_and_sign(dx_container);
 }
 
 KernelCodeGenDX12::CompileResult KernelCodeGenDX12::compile() {
   TI_AUTO_PROF;
-  auto *llvm_prog = get_llvm_program(prog);
-  auto *tlctx = llvm_prog->get_llvm_context(kernel->arch);
-  auto &config = prog->this_thread_config();
-  std::string kernel_key = get_hashed_offline_cache_key(&config, kernel);
-  kernel->set_kernel_key_for_cache(kernel_key);
+  const auto &config = get_compile_config();
 
-  if (!kernel->lowered()) {
-    kernel->lower(/*to_executable=*/false);
+  bool verbose = config.print_ir;
+  if (kernel->is_accessor && !config.print_accessor_ir) {
+    verbose = false;
   }
 
-  auto block = dynamic_cast<Block *>(kernel->ir.get());
+  irpass::compile_to_offloads(ir, config, kernel, verbose,
+                              /*autodiff_mode=*/kernel->autodiff_mode,
+                              /*ad_use_stack=*/true,
+                              /*start_from_ast=*/kernel->ir_is_ast());
+
+  auto block = dynamic_cast<Block *>(ir);
   TI_ASSERT(block);
 
   auto &offloads = block->statements;
 
   CompileResult Result;
   for (int i = 0; i < offloads.size(); i++) {
-    auto offload =
-        irpass::analysis::clone(offloads[i].get(), offloads[i]->get_kernel());
+    auto offload = irpass::analysis::clone(offloads[i].get());
     irpass::re_id(offload.get());
-    auto *offload_stmt = offload->as<OffloadedStmt>();
-    auto new_data = compile_task(nullptr, offload_stmt);
+    auto offload_name = offload->as<OffloadedStmt>()->task_name();
+
+    Block blk;
+    blk.insert(std::move(offload));
+    auto new_data = compile_task(i, config, nullptr, &blk);
 
     Result.task_dxil_source_codes.emplace_back(
-        generate_dxil_from_llvm(new_data, kernel));
+        generate_dxil_from_llvm(new_data, config, kernel));
     aot::CompiledOffloadedTask task;
     // FIXME: build all fields for task.
-    task.name = fmt::format("{}_{}_{}", kernel->get_name(),
-                            offload_stmt->task_name(), i);
-    task.type = offload_stmt->task_name();
+    task.name = fmt::format("{}_{}_{}", kernel->get_name(), offload_name, i);
+    task.type = offload_name;
     Result.tasks.emplace_back(task);
   }
   // FIXME: set correct num_snode_trees.
@@ -270,15 +271,13 @@ KernelCodeGenDX12::CompileResult KernelCodeGenDX12::compile() {
 }
 
 LLVMCompiledTask KernelCodeGenDX12::compile_task(
+    int task_codegen_id,
+    const CompileConfig &config,
     std::unique_ptr<llvm::Module> &&module,
-    OffloadedStmt *stmt) {
-  TaskCodeGenLLVMDX12 gen(kernel, stmt);
+    IRNode *block) {
+  TaskCodeGenLLVMDX12 gen(task_codegen_id, config, get_taichi_llvm_context(),
+                          kernel, block);
   return gen.run_compilation();
 }
 #endif  // TI_WITH_LLVM
-
-FunctionType KernelCodeGenDX12::compile_to_function() {
-  // FIXME: implement compile_to_function.
-  return [](RuntimeContext &ctx) {};
-}
 }  // namespace taichi::lang

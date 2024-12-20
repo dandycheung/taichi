@@ -33,7 +33,7 @@ struct KernelProfileStatisticalResult {
   double max;
   double total;
 
-  KernelProfileStatisticalResult(const std::string &name)
+  explicit KernelProfileStatisticalResult(const std::string &name)
       : name(name), counter(0), min(0), max(0), total(0) {
   }
 
@@ -93,6 +93,8 @@ class KernelProfilerBase {
   }
 
   double get_total_time() const;
+
+  void insert_record(const std::string &kernel_name, double duration_ms);
 
   virtual std::string get_device_name() {
     std::string str(" ");

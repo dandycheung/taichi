@@ -17,6 +17,7 @@
 #include "taichi/transforms/demote_mesh_statements.h"
 #include "taichi/transforms/simplify.h"
 #include "taichi/common/trait.h"
+#include "taichi/program/function.h"
 
 namespace taichi::lang {
 
@@ -29,8 +30,9 @@ namespace irpass {
 
 void re_id(IRNode *root);
 void flag_access(IRNode *root);
-void scalarize(IRNode *root);
-void lower_matrix_ptr(IRNode *root);
+void eliminate_immutable_local_vars(IRNode *root);
+bool scalarize(IRNode *root, bool half2_optimization_enabled = false);
+void lower_matrix_ptr(IRNode *root, bool force_scalarize = false);
 bool die(IRNode *root);
 bool simplify(IRNode *root, const CompileConfig &config);
 bool cfg_optimization(
@@ -52,7 +54,14 @@ bool cache_loop_invariant_global_vars(IRNode *root,
 void full_simplify(IRNode *root,
                    const CompileConfig &config,
                    const FullSimplifyPass::Args &args);
-void print(IRNode *root, std::string *output = nullptr);
+void print(IRNode *root,
+           std::string *output = nullptr,
+           bool print_ir_dbg_info = false);
+std::function<void(const std::string &)> make_pass_printer(
+    bool verbose,
+    bool print_ir_dbg_info,
+    const std::string &kernel_name,
+    IRNode *ir);
 void frontend_type_check(IRNode *root);
 void lower_ast(IRNode *root);
 void type_check(IRNode *root, const CompileConfig &config);
@@ -65,11 +74,14 @@ void replace_all_usages_with(IRNode *root, Stmt *old_stmt, Stmt *new_stmt);
 bool check_out_of_bound(IRNode *root,
                         const CompileConfig &config,
                         const CheckOutOfBoundPass::Args &args);
+void handle_external_ptr_boundary(IRNode *root, const CompileConfig &config);
 void make_thread_local(IRNode *root, const CompileConfig &config);
 std::unique_ptr<ScratchPads> initialize_scratch_pad(OffloadedStmt *root);
 void make_block_local(IRNode *root,
                       const CompileConfig &config,
                       const MakeBlockLocalPass::Args &args);
+void make_cpu_multithreaded_range_for(IRNode *root,
+                                      const CompileConfig &config);
 void make_mesh_thread_local(IRNode *root,
                             const CompileConfig &config,
                             const MakeBlockLocalPass::Args &args);
@@ -102,9 +114,8 @@ void differentiation_validation_check(IRNode *root,
  * AD-stacks before this pass.
  */
 bool determine_ad_stack_size(IRNode *root, const CompileConfig &config);
-bool constant_fold(IRNode *root,
-                   const CompileConfig &config,
-                   const ConstantFoldPass::Args &args);
+bool constant_fold(IRNode *root);
+void associate_continue_scope(IRNode *root, const CompileConfig &config);
 void offload(IRNode *root, const CompileConfig &config);
 bool transform_statements(
     IRNode *root,
@@ -130,7 +141,7 @@ bool replace_and_insert_statements(
 bool replace_statements(IRNode *root,
                         std::function<bool(Stmt *)> filter,
                         std::function<Stmt *(Stmt *)> finder);
-void demote_dense_struct_fors(IRNode *root, bool packed);
+void demote_dense_struct_fors(IRNode *root);
 void demote_no_access_mesh_fors(IRNode *root);
 bool demote_atomics(IRNode *root, const CompileConfig &config);
 void reverse_segments(IRNode *root);  // for autograd
@@ -150,17 +161,16 @@ ENUM_FLAGS(ExternalPtrAccess){NONE = 0, READ = 1, WRITE = 2};
  * @return
  *   The analyzed result.
  */
-std::unordered_map<int, ExternalPtrAccess> detect_external_ptr_access_in_task(
-    OffloadedStmt *offload);
+std::unordered_map<std::vector<int>,
+                   ExternalPtrAccess,
+                   hashing::Hasher<std::vector<int>>>
+detect_external_ptr_access_in_task(OffloadedStmt *offload);
 
 // compile_to_offloads does the basic compilation to create all the offloaded
-// tasks of a Taichi kernel. It's worth pointing out that this doesn't demote
-// dense struct fors. This is a necessary workaround to prevent the async
-// engine from fusing incompatible offloaded tasks. TODO(Lin): check this
-// comment
+// tasks of a Taichi kernel.
 void compile_to_offloads(IRNode *ir,
                          const CompileConfig &config,
-                         Kernel *kernel,
+                         const Kernel *kernel,
                          bool verbose,
                          AutodiffMode autodiff_mode,
                          bool ad_use_stack,
@@ -168,7 +178,7 @@ void compile_to_offloads(IRNode *ir,
 
 void offload_to_executable(IRNode *ir,
                            const CompileConfig &config,
-                           Kernel *kernel,
+                           const Kernel *kernel,
                            bool verbose,
                            bool determine_ad_stack_size,
                            bool lower_global_access,
@@ -178,7 +188,7 @@ void offload_to_executable(IRNode *ir,
 // additional optimizations so that |ir| can be directly fed into codegen.
 void compile_to_executable(IRNode *ir,
                            const CompileConfig &config,
-                           Kernel *kernel,
+                           const Kernel *kernel,
                            AutodiffMode autodiff_mode,
                            bool ad_use_stack,
                            bool verbose,
@@ -186,14 +196,17 @@ void compile_to_executable(IRNode *ir,
                            bool make_thread_local = false,
                            bool make_block_local = false,
                            bool start_from_ast = true);
-// Compile a function with some basic optimizations, so that the number of
-// statements is reduced before inlining.
+// Compile a function with some basic optimizations
 void compile_function(IRNode *ir,
                       const CompileConfig &config,
                       Function *func,
                       AutodiffMode autodiff_mode,
                       bool verbose,
-                      bool start_from_ast);
+                      Function::IRStage target_stage);
+
+void compile_taichi_functions(IRNode *ir,
+                              const CompileConfig &compile_config,
+                              Function::IRStage target_stage);
 }  // namespace irpass
 
 }  // namespace taichi::lang

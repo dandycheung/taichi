@@ -17,7 +17,7 @@
   "dx12"            : "DirectX 12 backend",
   "spirv"           : "SPIR-V common codegen",
   "gfx"             : "Common graphics runtime",
-  "wasm"            : "WebAssembly backend",
+  "rhi"             : "Unified Device API",
   "misc"            : "Miscellaneous",
   "std"             : "Standard library",
   "opt"             : "IR optimization passes",
@@ -40,7 +40,6 @@
   "docker"          : "Docker container",
   "perf"            : "Performance improvements",
   "ipython"         : "IPython and other shells",
-  "cc"              : "C source backend",
   "error"           : "Error messages",
   "blender"         : "Blender integration",
   "export"          : "Exporting kernels",
@@ -48,5 +47,6 @@
   "simt"            : "SIMT programming",
   "release"         : "Release",
   "build"           : "Build system",
-  "rfc"             : "RFC"
+  "rfc"             : "RFC",
+  "amdgpu"          : "AMDGPU backend"
 }

@@ -28,7 +28,9 @@ class InvokeRefineCoordinatesBuilder : public LLVMModuleBuilder {
   // ret    : Value of the first child physical coordinates
   using FuncType = int (*)(int, int);
 
-  static FuncType build(const SNode *snode, TaichiLLVMContext *tlctx) {
+  static FuncType build(const SNode *snode,
+                        TaichiLLVMContext *tlctx,
+                        LlvmRuntimeExecutor *executor) {
     InvokeRefineCoordinatesBuilder mb{tlctx};
     mb.run_jit(snode);
     LLVMCompiledTask data;
@@ -38,7 +40,7 @@ class InvokeRefineCoordinatesBuilder : public LLVMModuleBuilder {
     std::vector<std::unique_ptr<LLVMCompiledTask>> data_list;
     data_list.push_back(std::make_unique<LLVMCompiledTask>(std::move(data)));
     auto linked_data = tlctx->link_compiled_tasks(std::move(data_list));
-    auto *jit = tlctx->create_jit_module(std::move(linked_data.module));
+    auto *jit = executor->create_jit_module(std::move(linked_data.module));
     auto *fn = jit->lookup_function(kFuncName);
     return reinterpret_cast<FuncType>(fn);
   }
@@ -103,38 +105,28 @@ class InvokeRefineCoordinatesBuilder : public LLVMModuleBuilder {
   std::unordered_set<int> used_snode_tree_ids;
 };
 
-struct BitsRange {
-  int begin{0};
-  int end{0};
-
-  int extract(int v) const {
-    const unsigned mask = (1U << (end - begin)) - 1;
-    return (v >> begin) & mask;
-  }
-};
-
 constexpr int kPointerSize = 5;
-constexpr int kDenseSize = 7;
+constexpr int kDenseSize = 8;
 
 class RefineCoordinatesTest : public ::testing::Test {
  protected:
   void SetUp() override {
     arch_ = host_arch();
-    config_.packed = false;
     config_.print_kernel_llvm_ir = false;
     prog_ = std::make_unique<Program>(arch_);
     auto *llvm_prog_ = get_llvm_program(prog_.get());
-    tlctx_ = llvm_prog_->get_llvm_context(arch_);
+    tlctx_ = llvm_prog_->get_llvm_context();
+    executor_ = llvm_prog_->get_runtime_executor();
 
     root_snode_ = std::make_unique<SNode>(/*depth=*/0, /*t=*/SNodeType::root);
     const std::vector<Axis> axes = {Axis{0}};
-    ptr_snode_ = &(root_snode_->pointer(axes, kPointerSize, false));
-    dense_snode_ = &(ptr_snode_->dense(axes, kDenseSize, false));
+    ptr_snode_ = &(root_snode_->pointer(axes, kPointerSize));
+    dense_snode_ = &(ptr_snode_->dense(axes, kDenseSize));
     // Must end with a `place` SNode.
     auto &leaf_snode = dense_snode_->insert_children(SNodeType::place);
     leaf_snode.dt = PrimitiveType::f32;
 
-    auto sc = std::make_unique<StructCompilerLLVM>(arch_, &config_, tlctx_,
+    auto sc = std::make_unique<StructCompilerLLVM>(arch_, config_, tlctx_,
                                                    tlctx_->new_module("struct"),
                                                    /*snode_tree_id=*/0);
     sc->run(*root_snode_);
@@ -147,6 +139,7 @@ class RefineCoordinatesTest : public ::testing::Test {
   // ¯\_(ツ)_/¯
   std::unique_ptr<Program> prog_{nullptr};
   TaichiLLVMContext *tlctx_{nullptr};
+  LlvmRuntimeExecutor *executor_{nullptr};
 
   std::unique_ptr<SNode> root_snode_{nullptr};
   SNode *ptr_snode_{nullptr};
@@ -155,25 +148,17 @@ class RefineCoordinatesTest : public ::testing::Test {
 
 TEST_F(RefineCoordinatesTest, Basic) {
   auto *refine_ptr_fn =
-      InvokeRefineCoordinatesBuilder::build(ptr_snode_, tlctx_);
+      InvokeRefineCoordinatesBuilder::build(ptr_snode_, tlctx_, executor_);
   auto *refine_dense_fn =
-      InvokeRefineCoordinatesBuilder::build(dense_snode_, tlctx_);
+      InvokeRefineCoordinatesBuilder::build(dense_snode_, tlctx_, executor_);
 
-  const BitsRange dense_bit_range{/*begin=*/0,
-                                  /*end=*/dense_snode_->extractors[0].num_bits};
-  const BitsRange ptr_bit_range{
-      /*begin=*/dense_bit_range.end,
-      /*end=*/dense_bit_range.end + ptr_snode_->extractors[0].num_bits};
   constexpr int kRootPhyCoord = 0;
   for (int i = 0; i < kPointerSize; ++i) {
     const int ptr_phy_coord = refine_ptr_fn(kRootPhyCoord, i);
     for (int j = 0; j < kDenseSize; ++j) {
       const int loop_index = refine_dense_fn(ptr_phy_coord, j);
-      // TODO: This is basically doing a lower_scalar_ptr() manually.
-      // We should modularize that function, and use it to generate IRs that
-      // does the bit extraction procedure.
-      const int dense_portion = dense_bit_range.extract(loop_index);
-      const int ptr_portion = ptr_bit_range.extract(loop_index);
+      const int dense_portion = loop_index % dense_snode_->extractors[0].shape;
+      const int ptr_portion = loop_index / dense_snode_->extractors[0].shape;
       EXPECT_EQ(dense_portion, j);
       EXPECT_EQ(ptr_portion, i);
     }

@@ -29,7 +29,7 @@ ProfilingToolkit get_toolkit_enum(std::string toolkit_name) {
 bool KernelProfilerCUDA::set_profiler_toolkit(std::string toolkit_name) {
   sync();
   ProfilingToolkit set_toolkit = get_toolkit_enum(toolkit_name);
-  TI_TRACE("profiler toolkit enum = {} >>> {}", tool_, set_toolkit);
+  TI_TRACE("profiler toolkit enum = {} >>> {}", int(tool_), int(set_toolkit));
   if (set_toolkit == tool_)
     return true;
 
@@ -318,10 +318,11 @@ void EventToolkit::update_record(
     std::vector<KernelProfileTracedRecord> &traced_records) {
   uint32_t events_num = event_records_.size();
   uint32_t records_num = traced_records.size();
-  TI_ERROR_IF(records_size_after_sync + events_num != records_num,
-              "KernelProfilerCUDA::EventToolkit: event_records_.size({}) != "
-              "traced_records_.size({})",
-              records_size_after_sync + events_num, records_num);
+  TI_ERROR_IF(
+      records_size_after_sync + events_num != records_num,
+      "KernelProfilerCUDA::EventToolkitCUDA: event_records_.size({}) != "
+      "traced_records_.size({})",
+      records_size_after_sync + events_num, records_num);
 
   uint32_t idx = 0;
   for (auto &record : event_records_) {

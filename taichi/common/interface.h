@@ -117,7 +117,7 @@ class InterfaceHolder {
   class TI_IMPLEMENTATION_HOLDER_NAME(T) final                                \
       : public ImplementationHolderBase {                                     \
    public:                                                                    \
-    TI_IMPLEMENTATION_HOLDER_NAME(T)(const std::string &name) {               \
+    explicit TI_IMPLEMENTATION_HOLDER_NAME(T)(const std::string &name) {      \
       this->name = name;                                                      \
     }                                                                         \
     using FactoryMethod = std::function<std::shared_ptr<T>()>;                \
@@ -325,12 +325,8 @@ class InterfaceHolder {
     }                                                                \
   } ImplementationInjector_##base_class_name##class_name##instance;
 
-#define TI_NAME(alias)                            \
-  virtual std::string get_name() const override { \
-    return get_name_static();                     \
-  }                                               \
-  static std::string get_name_static() {          \
-    return alias;                                 \
-  }
+#define TI_NAME(alias)                                                        \
+  virtual std::string get_name() const override { return get_name_static(); } \
+  static std::string get_name_static() { return alias; }
 
 }  // namespace taichi

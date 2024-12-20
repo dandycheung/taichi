@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 from pytest import approx
 from taichi.lang.simt import subgroup
 
@@ -35,6 +36,34 @@ def test_all_nonzero():
 
 
 @test_utils.test(arch=ti.cuda)
+def test_sync_all_nonzero():
+    a = ti.field(dtype=ti.i32, shape=256)
+    b = ti.field(dtype=ti.i32, shape=256)
+
+    @ti.kernel
+    def foo():
+        ti.loop_config(block_dim=256)
+        for i in range(256):
+            a[i] = ti.simt.block.sync_all_nonzero(b[i])
+
+    for i in range(256):
+        b[i] = 1
+        a[i] = -1
+
+    foo()
+
+    for i in range(256):
+        assert a[i] == 1
+
+    b[np.random.randint(0, 256)] = 0
+
+    foo()
+
+    for i in range(256):
+        assert a[i] == 0
+
+
+@test_utils.test(arch=ti.cuda)
 def test_any_nonzero():
     a = ti.field(dtype=ti.i32, shape=32)
     b = ti.field(dtype=ti.i32, shape=32)
@@ -63,9 +92,68 @@ def test_any_nonzero():
 
 
 @test_utils.test(arch=ti.cuda)
+def test_sync_any_nonzero():
+    a = ti.field(dtype=ti.i32, shape=256)
+    b = ti.field(dtype=ti.i32, shape=256)
+
+    @ti.kernel
+    def foo():
+        ti.loop_config(block_dim=256)
+        for i in range(256):
+            a[i] = ti.simt.block.sync_any_nonzero(b[i])
+
+    for i in range(256):
+        b[i] = 0
+        a[i] = -1
+
+    foo()
+
+    for i in range(256):
+        assert a[i] == 0
+
+    b[np.random.randint(0, 256)] = 1
+
+    foo()
+
+    for i in range(256):
+        assert a[i] == 1
+
+
+@test_utils.test(arch=ti.cuda)
+def test_sync_count_nonzero():
+    a = ti.field(dtype=ti.i32, shape=256)
+    b = ti.field(dtype=ti.i32, shape=256)
+
+    @ti.kernel
+    def foo():
+        ti.loop_config(block_dim=256)
+        for i in range(256):
+            a[i] = ti.simt.block.sync_count_nonzero(b[i])
+
+    for i in range(256):
+        b[i] = 0
+        a[i] = -1
+
+    foo()
+
+    for i in range(256):
+        assert a[i] == 0
+
+    random_idx_count = np.random.randint(0, 256)
+    random_idx = np.random.choice(256, random_idx_count, replace=False)
+    for i in range(random_idx_count):
+        b[random_idx[i]] = 1
+
+    foo()
+
+    for i in range(256):
+        assert a[i] == random_idx_count
+
+
+@test_utils.test(arch=ti.cuda)
 def test_unique():
     a = ti.field(dtype=ti.u32, shape=32)
-    b = ti.field(dtype=ti.u32, shape=32)
+    b = ti.field(dtype=ti.i32, shape=32)
 
     @ti.kernel
     def check():
@@ -101,7 +189,7 @@ def test_unique():
 @test_utils.test(arch=ti.cuda)
 def test_ballot():
     a = ti.field(dtype=ti.u32, shape=32)
-    b = ti.field(dtype=ti.u32, shape=32)
+    b = ti.field(dtype=ti.i32, shape=32)
 
     @ti.kernel
     def foo():
@@ -174,8 +262,7 @@ def test_shfl_xor_i32():
         for i in range(32):
             for j in range(5):
                 offset = 1 << j
-                a[i] += ti.simt.warp.shfl_xor_i32(ti.u32(0xFFFFFFFF), a[i],
-                                                  offset)
+                a[i] += ti.simt.warp.shfl_xor_i32(ti.u32(0xFFFFFFFF), a[i], offset)
 
     value = 0
     for i in range(32):
@@ -269,6 +356,10 @@ def test_shfl_down_f32():
 
 @test_utils.test(arch=ti.cuda)
 def test_match_any():
+    # Skip match_any test for Pascal
+    if ti.lang.impl.get_cuda_compute_capability() < 70:
+        pytest.skip("match_any not supported on Pascal")
+
     a = ti.field(dtype=ti.i32, shape=32)
     b = ti.field(dtype=ti.u32, shape=32)
 
@@ -292,6 +383,10 @@ def test_match_any():
 
 @test_utils.test(arch=ti.cuda)
 def test_match_all():
+    # Skip match_all test for Pascal
+    if ti.lang.impl.get_cuda_compute_capability() < 70:
+        pytest.skip("match_all not supported on Pascal")
+
     a = ti.field(dtype=ti.i32, shape=32)
     b = ti.field(dtype=ti.u32, shape=32)
     c = ti.field(dtype=ti.u32, shape=32)
@@ -377,18 +472,15 @@ def test_block_sync():
 # TODO: replace this with a stronger test case
 @test_utils.test(arch=ti.cuda)
 def test_grid_memfence():
-
     N = 1000
     BLOCK_SIZE = 1
     a = ti.field(dtype=ti.u32, shape=N)
 
     @ti.kernel
     def foo():
-
         block_counter = 0
         ti.loop_config(block_dim=BLOCK_SIZE)
         for i in range(N):
-
             a[i] = 1
             ti.simt.grid.memfence()
 
@@ -425,9 +517,9 @@ def _test_subgroup_reduce(op, group_op, np_op, size, initial_value, dtype):
         return sum
 
     if dtype == ti.i32 or dtype == ti.i64:
-        assert (reduce_all() == np_op(rand_values))
+        assert reduce_all() == np_op(rand_values)
     else:
-        assert (reduce_all() == approx(np_op(rand_values), 3e-4))
+        assert reduce_all() == approx(np_op(rand_values), 3e-4)
 
 
 # We use 2677 as size because it is a prime number
@@ -436,14 +528,12 @@ def _test_subgroup_reduce(op, group_op, np_op, size, initial_value, dtype):
 
 @test_utils.test(arch=ti.vulkan, exclude=[(ti.vulkan, "Darwin")])
 def test_subgroup_reduction_add_i32():
-    _test_subgroup_reduce(ti.atomic_add, subgroup.reduce_add, np.sum, 2677, 0,
-                          ti.i32)
+    _test_subgroup_reduce(ti.atomic_add, subgroup.reduce_add, np.sum, 2677, 0, ti.i32)
 
 
 @test_utils.test(arch=ti.vulkan)
 def test_subgroup_reduction_add_f32():
-    _test_subgroup_reduce(ti.atomic_add, subgroup.reduce_add, np.sum, 2677, 0,
-                          ti.f32)
+    _test_subgroup_reduce(ti.atomic_add, subgroup.reduce_add, np.sum, 2677, 0, ti.f32)
 
 
 # @test_utils.test(arch=ti.vulkan)
@@ -453,17 +543,14 @@ def test_subgroup_reduction_add_f32():
 
 @test_utils.test(arch=ti.vulkan, exclude=[(ti.vulkan, "Darwin")])
 def test_subgroup_reduction_max_i32():
-    _test_subgroup_reduce(ti.atomic_max, subgroup.reduce_max, np.max, 2677, 0,
-                          ti.i32)
+    _test_subgroup_reduce(ti.atomic_max, subgroup.reduce_max, np.max, 2677, 0, ti.i32)
 
 
 @test_utils.test(arch=ti.vulkan)
 def test_subgroup_reduction_max_f32():
-    _test_subgroup_reduce(ti.atomic_max, subgroup.reduce_max, np.max, 2677, 0,
-                          ti.f32)
+    _test_subgroup_reduce(ti.atomic_max, subgroup.reduce_max, np.max, 2677, 0, ti.f32)
 
 
 @test_utils.test(arch=ti.vulkan)
 def test_subgroup_reduction_min_f32():
-    _test_subgroup_reduce(ti.atomic_max, subgroup.reduce_max, np.max, 2677, 0,
-                          ti.f32)
+    _test_subgroup_reduce(ti.atomic_max, subgroup.reduce_max, np.max, 2677, 0, ti.f32)

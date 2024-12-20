@@ -2,6 +2,7 @@
 
 #include "taichi/program/ndarray.h"
 #include "taichi/program/program.h"
+#include "fp16.h"
 
 #ifdef TI_WITH_LLVM
 #include "taichi/runtime/llvm/llvm_context.h"
@@ -14,26 +15,23 @@ namespace {
 
 size_t flatten_index(const std::vector<int> &shapes,
                      const std::vector<int> &indices) {
-  TI_ASSERT(shapes.size() == indices.size());
-  if (indices.size() == 1) {
-    return indices[0];
-  } else {
-    size_t ind = indices[0];
-    for (int i = 1; i < indices.size(); i++) {
-      ind = ind * shapes[i] + indices[i];
-    }
-    return ind;
+  size_t ind = 0;
+  for (int i = 0; i < indices.size(); i++) {
+    ind = ind * shapes[i] + indices[i];
   }
+  return ind;
 }
 }  // namespace
 
 Ndarray::Ndarray(Program *prog,
                  const DataType type,
                  const std::vector<int> &shape_,
-                 ExternalArrayLayout layout_)
+                 ExternalArrayLayout layout_,
+                 const DebugInfo &dbg_info_)
     : dtype(type),
       shape(shape_),
       layout(layout_),
+      dbg_info(dbg_info_),
       nelement_(std::accumulate(std::begin(shape_),
                                 std::end(shape_),
                                 1,
@@ -51,19 +49,29 @@ Ndarray::Ndarray(Program *prog,
     total_shape_.insert(total_shape_.begin(), element_shape.begin(),
                         element_shape.end());
   }
-
-  ndarray_alloc_ = prog->allocate_memory_ndarray(nelement_ * element_size_,
-                                                 prog->result_buffer);
+  auto total_num_scalar =
+      std::accumulate(std::begin(total_shape_), std::end(total_shape_), 1LL,
+                      std::multiplies<>());
+  if (total_num_scalar > std::numeric_limits<int>::max()) {
+    ErrorEmitter(
+        TaichiIndexWarning(), &dbg_info,
+        "Ndarray index might be out of int32 boundary but int64 indexing is "
+        "not supported yet.");
+  }
+  ndarray_alloc_ = prog->allocate_memory_on_device(nelement_ * element_size_,
+                                                   prog->result_buffer);
 }
 
 Ndarray::Ndarray(DeviceAllocation &devalloc,
                  const DataType type,
                  const std::vector<int> &shape,
-                 ExternalArrayLayout layout)
+                 ExternalArrayLayout layout,
+                 const DebugInfo &dbg_info)
     : ndarray_alloc_(devalloc),
       dtype(type),
       shape(shape),
       layout(layout),
+      dbg_info(dbg_info),
       nelement_(std::accumulate(std::begin(shape),
                                 std::end(shape),
                                 1,
@@ -84,17 +92,28 @@ Ndarray::Ndarray(DeviceAllocation &devalloc,
     total_shape_.insert(total_shape_.begin(), element_shape.begin(),
                         element_shape.end());
   }
+  auto total_num_scalar =
+      std::accumulate(std::begin(total_shape_), std::end(total_shape_), 1LL,
+                      std::multiplies<>());
+  if (total_num_scalar > std::numeric_limits<int>::max()) {
+    ErrorEmitter(
+        TaichiIndexWarning(), &dbg_info,
+        "Ndarray index might be out of int32 boundary but int64 indexing is "
+        "not supported yet.");
+  }
 }
 
 Ndarray::Ndarray(DeviceAllocation &devalloc,
                  const DataType type,
                  const std::vector<int> &shape,
                  const std::vector<int> &element_shape,
-                 ExternalArrayLayout layout)
+                 ExternalArrayLayout layout,
+                 const DebugInfo &dbg_info)
     : Ndarray(devalloc,
               TypeFactory::create_tensor_type(element_shape, type),
               shape,
-              layout) {
+              layout,
+              dbg_info) {
   TI_ASSERT(type->is<PrimitiveType>());
 }
 
@@ -110,6 +129,10 @@ intptr_t Ndarray::get_device_allocation_ptr_as_int() const {
   // specified device. Note that torch-based ndarray's ptr is a raw ptr but
   // we'll get rid of it soon.
   return reinterpret_cast<intptr_t>(&ndarray_alloc_);
+}
+
+DeviceAllocation Ndarray::get_device_allocation() const {
+  return ndarray_alloc_;
 }
 
 std::vector<int> Ndarray::get_element_shape() const {
@@ -131,76 +154,87 @@ std::size_t Ndarray::get_nelement() const {
   return nelement_;
 }
 
-template <typename T>
-T Ndarray::read(const std::vector<int> &I) const {
+TypedConstant Ndarray::read(const std::vector<int> &I) const {
   prog_->synchronize();
   size_t index = flatten_index(total_shape_, I);
-  size_t size_ = sizeof(T);
+  size_t size = data_type_size(get_element_data_type());
   taichi::lang::Device::AllocParams alloc_params;
   alloc_params.host_write = false;
   alloc_params.host_read = true;
-  alloc_params.size = size_;
-  alloc_params.usage = taichi::lang::AllocUsage::Storage;
-  auto staging_buf_ =
+  alloc_params.size = size;
+  alloc_params.usage = AllocUsage::Storage;
+  auto [staging_buf_, res] =
       this->ndarray_alloc_.device->allocate_memory_unique(alloc_params);
+  TI_ASSERT(res == RhiResult::success);
   staging_buf_->device->memcpy_internal(
       staging_buf_->get_ptr(),
-      this->ndarray_alloc_.get_ptr(/*offset=*/index * sizeof(T)), size_);
+      this->ndarray_alloc_.get_ptr(/*offset=*/index * size), size);
 
-  char *const device_arr_ptr =
-      reinterpret_cast<char *>(staging_buf_->device->map(*staging_buf_));
-  TI_ASSERT(device_arr_ptr);
+  char *device_arr_ptr{nullptr};
+  TI_ASSERT(staging_buf_->device->map(
+                *staging_buf_, (void **)&device_arr_ptr) == RhiResult::success);
 
-  T data;
-  std::memcpy(&data, device_arr_ptr, size_);
+  TypedConstant data(get_element_data_type());
+  std::memcpy(&data.value_bits, device_arr_ptr, size);
   staging_buf_->device->unmap(*staging_buf_);
+
+  if (get_element_data_type()->is_primitive(PrimitiveTypeID::f16)) {
+    float float32 = fp16_ieee_to_fp32_value(data.val_u16);
+    data.val_f32 = float32;
+  }
   return data;
 }
 
-template <typename T>
-void Ndarray::write(const std::vector<int> &I, T val) const {
+void Ndarray::write(const std::vector<int> &I, TypedConstant val) const {
+  if (get_element_data_type()->is_primitive(PrimitiveTypeID::f16)) {
+    uint16_t float16 = fp16_ieee_from_fp32_value(val.val_f32);
+    std::memcpy(&val.value_bits, &float16, 4);
+  }
+
   size_t index = flatten_index(total_shape_, I);
-  size_t size_ = sizeof(T);
+  size_t size_ = data_type_size(get_element_data_type());
   taichi::lang::Device::AllocParams alloc_params;
   alloc_params.host_write = true;
   alloc_params.host_read = false;
   alloc_params.size = size_;
-  alloc_params.usage = taichi::lang::AllocUsage::Storage;
-  auto staging_buf_ =
+  alloc_params.usage = AllocUsage::Storage;
+  auto [staging_buf_, res] =
       this->ndarray_alloc_.device->allocate_memory_unique(alloc_params);
+  TI_ASSERT(res == RhiResult::success);
 
-  T *const device_arr_ptr =
-      reinterpret_cast<T *>(staging_buf_->device->map(*staging_buf_));
+  char *device_arr_ptr{nullptr};
+  TI_ASSERT(staging_buf_->device->map(
+                *staging_buf_, (void **)&device_arr_ptr) == RhiResult::success);
 
   TI_ASSERT(device_arr_ptr);
-  device_arr_ptr[0] = val;
+  std::memcpy(device_arr_ptr, &val.value_bits, size_);
 
   staging_buf_->device->unmap(*staging_buf_);
   staging_buf_->device->memcpy_internal(
-      this->ndarray_alloc_.get_ptr(index * sizeof(T)), staging_buf_->get_ptr(),
+      this->ndarray_alloc_.get_ptr(index * size_), staging_buf_->get_ptr(),
       size_);
 
   prog_->synchronize();
 }
 
 int64 Ndarray::read_int(const std::vector<int> &i) {
-  return read<int>(i);
+  return read(i).val_int();
 }
 
 uint64 Ndarray::read_uint(const std::vector<int> &i) {
-  return read<uint>(i);
+  return read(i).val_uint();
 }
 
 float64 Ndarray::read_float(const std::vector<int> &i) {
-  return read<float>(i);
+  return read(i).val_float();
 }
 
 void Ndarray::write_int(const std::vector<int> &i, int64 val) {
-  write<int>(i, val);
+  write(i, TypedConstant(get_element_data_type(), val));
 }
 
 void Ndarray::write_float(const std::vector<int> &i, float64 val) {
-  write<float>(i, val);
+  write(i, TypedConstant(get_element_data_type(), val));
 }
 
 }  // namespace taichi::lang

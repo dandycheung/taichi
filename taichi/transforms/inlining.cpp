@@ -13,26 +13,30 @@ class Inliner : public BasicStmtVisitor {
  public:
   using BasicStmtVisitor::visit;
 
-  explicit Inliner() : BasicStmtVisitor() {
+  explicit Inliner() {
   }
 
   void visit(FuncCallStmt *stmt) override {
     auto *func = stmt->func;
     TI_ASSERT(func);
-    TI_ASSERT(func->args.size() == stmt->args.size());
+    TI_ASSERT(func->parameter_list.size() == stmt->args.size());
     TI_ASSERT(func->ir->is<Block>());
     TI_ASSERT(func->rets.size() <= 1);
     auto inlined_ir = irpass::analysis::clone(func->ir.get());
-    if (!func->args.empty()) {
+    if (!func->parameter_list.empty()) {
       irpass::replace_statements(
           inlined_ir.get(),
           /*filter=*/[&](Stmt *s) { return s->is<ArgLoadStmt>(); },
           /*finder=*/
-          [&](Stmt *s) { return stmt->args[s->as<ArgLoadStmt>()->arg_id]; });
+          [&](Stmt *s) {
+            // Note: Functions in taichi do not support argpack.
+            TI_ASSERT(s->as<ArgLoadStmt>()->arg_id.size() == 1);
+            return stmt->args[s->as<ArgLoadStmt>()->arg_id[0]];
+          });
     }
     if (func->rets.empty()) {
-      modifier_.replace_with(stmt,
-                             std::move(inlined_ir->as<Block>()->statements));
+      modifier_.replace_with(
+          stmt, VecStatement(std::move(inlined_ir->as<Block>()->statements)));
     } else {
       if (irpass::analysis::gather_statements(inlined_ir.get(), [&](Stmt *s) {
             return s->is<ReturnStmt>();
@@ -40,7 +44,7 @@ class Inliner : public BasicStmtVisitor {
         TI_WARN(
             "Multiple returns in function \"{}\" may not be handled "
             "properly.\n{}",
-            func->get_name(), stmt->tb);
+            func->get_name(), stmt->get_tb());
       }
       // Use a local variable to store the return value
       auto *return_address = inlined_ir->as<Block>()->insert(

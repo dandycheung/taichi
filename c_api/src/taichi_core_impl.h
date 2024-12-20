@@ -1,26 +1,37 @@
 #pragma once
+#include <vector>
+#include <memory>
+#include <string>
 #include <exception>
-#include "taichi/taichi_core.h"
-#include "taichi/aot/module_loader.h"
-#include "taichi/rhi/device.h"
-#include "taichi/program/texture.h"
-#include "taichi/runtime/gfx/aot_module_loader_impl.h"
+#include <stdexcept>
 
+// Taichi runtime is not necessarily using the same 3rd-party headers as the
+// user codes. For C-API implementations we only use the internal headers.
+#ifdef TI_WITH_VULKAN
+#ifndef VK_NO_PROTOTYPES
+#define VK_NO_PROTOTYPES 1
+#endif  // VK_NO_PROTOTYPES
+#include "vulkan/vulkan.h"
+#define TI_NO_VULKAN_INCLUDES 1
+#endif  // TI_WITH_VULKAN
+
+#ifdef TI_WITH_OPENGL
+#include "glad/gl.h"
+#define TI_NO_OPENGL_INCLUDES 1
+#endif  // TI_WITH_OPENGL
+
+// Then Include all C-API symbols.
+#include "taichi/taichi.h"
+
+// Include for the base types.
+#include "taichi/rhi/arch.h"
 #define TI_RUNTIME_HOST 1
 #include "taichi/program/context.h"
 #undef TI_RUNTIME_HOST
-
-// Error reporting.
-#define TI_CAPI_INCOMPLETE(x) ti_set_last_error(TI_ERROR_INCOMPLETE, #x);
-#define TI_CAPI_INCOMPLETE_IF(x)                \
-  if (x) {                                      \
-    ti_set_last_error(TI_ERROR_INCOMPLETE, #x); \
-  }
-#define TI_CAPI_INCOMPLETE_IF_RV(x)             \
-  if (x) {                                      \
-    ti_set_last_error(TI_ERROR_INCOMPLETE, #x); \
-    return TI_NULL_HANDLE;                      \
-  }
+#include "taichi/rhi/device.h"
+#include "taichi/aot/graph_data.h"
+#include "taichi/aot/module_loader.h"
+#include "taichi/common/virtual_dir.h"
 
 #define TI_CAPI_NOT_SUPPORTED(x) ti_set_last_error(TI_ERROR_NOT_SUPPORTED, #x);
 #define TI_CAPI_NOT_SUPPORTED_IF(x)                \
@@ -79,26 +90,59 @@
     ti_set_last_error(TI_ERROR_INVALID_STATE, "c++ exception"); \
   }
 
-class Runtime;
-class Context;
-class AotModule;
+struct Error {
+  TiError error;
+  std::string message;
+
+  Error(TiError error, const std::string &message)
+      : error(error), message(message) {
+  }
+  Error() : error(TI_ERROR_SUCCESS), message() {
+  }
+  Error(const Error &) = delete;
+  Error(Error &&) = default;
+  Error &operator=(const Error &) = delete;
+  Error &operator=(Error &&) = default;
+
+  // Set this error as the last error if it's not `TI_ERROR_SUCCESS`.
+  inline void set_last_error() const {
+    if (error != TI_ERROR_SUCCESS) {
+      ti_set_last_error(error, message.c_str());
+    }
+  }
+};
+
+namespace capi {
+class MetalRuntime;
+}  // namespace capi
 
 class Runtime {
  protected:
   // 32 is a magic number in `taichi/inc/constants.h`.
   std::array<uint64_t, 32> host_result_buffer_;
 
-  Runtime(taichi::Arch arch);
+  explicit Runtime(taichi::Arch arch);
 
  public:
   const taichi::Arch arch;
-  taichi::lang::RuntimeContext runtime_context_;
 
   virtual ~Runtime();
 
   virtual taichi::lang::Device &get() = 0;
 
-  virtual TiAotModule load_aot_module(const char *module_path) = 0;
+  [[deprecated("create_aot_module")]] virtual TiAotModule load_aot_module(
+      const char *module_path) {
+    auto dir = taichi::io::VirtualDir::open(module_path);
+    TiAotModule aot_module = TI_NULL_HANDLE;
+    Error err = create_aot_module(dir.get(), aot_module);
+    err.set_last_error();
+    return aot_module;
+  }
+
+  virtual Error create_aot_module(const taichi::io::VirtualDir *dir,
+                                  TiAotModule &out) {
+    TI_NOT_IMPLEMENTED
+  }
   virtual TiMemory allocate_memory(
       const taichi::lang::Device::AllocParams &params);
   virtual void free_memory(TiMemory devmem);
@@ -129,19 +173,11 @@ class Runtime {
                                 taichi::lang::ImageLayout layout) {
     TI_NOT_IMPLEMENTED
   }
-  virtual void signal_event(taichi::lang::DeviceEvent *event) {
-    TI_NOT_IMPLEMENTED
-  }
-  virtual void reset_event(taichi::lang::DeviceEvent *event) {
-    TI_NOT_IMPLEMENTED
-  }
-  virtual void wait_event(taichi::lang::DeviceEvent *event) {
-    TI_NOT_IMPLEMENTED
-  }
-  virtual void submit() = 0;
+  virtual void flush() = 0;
   virtual void wait() = 0;
 
   class VulkanRuntime *as_vk();
+  class capi::MetalRuntime *as_mtl();
 };
 
 class AotModule {
@@ -158,17 +194,6 @@ class AotModule {
   taichi::lang::aot::Kernel *get_kernel(const std::string &name);
   taichi::lang::aot::CompiledGraph *get_cgraph(const std::string &name);
   taichi::lang::aot::Module &get();
-  Runtime &runtime();
-};
-
-class Event {
-  Runtime *runtime_;
-  std::unique_ptr<taichi::lang::DeviceEvent> event_;
-
- public:
-  Event(Runtime &runtime, std::unique_ptr<taichi::lang::DeviceEvent> event);
-
-  taichi::lang::DeviceEvent &get();
   Runtime &runtime();
 };
 

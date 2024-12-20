@@ -1,16 +1,17 @@
 {
-    "version": "1.0.2",
     "modules": [
         {
             "name": "taichi/taichi_platform.h",
             "is_built_in": true
         },
         {
-            "name": "vulkan/vulkan.h",
-            "is_built_in": true
-        },
-        {
             "name": "taichi/taichi_core.h",
+            "default_definitions": [
+                {
+                    "name": "TI_C_API_VERSION"
+                }
+            ],
+            "doc": "taichi/taichi_core.h.md",
             "required_modules": [
                 "taichi/taichi_platform.h"
             ],
@@ -18,51 +19,55 @@
                 {
                     "name": "bool",
                     "type": "alias",
+                    "since": "v1.4.0",
                     "alias_of": "uint32_t"
                 },
                 {
                     "name": "false",
                     "type": "definition",
+                    "since": "v1.4.0",
                     "value": "0"
                 },
                 {
                     "name": "true",
                     "type": "definition",
+                    "since": "v1.4.0",
                     "value": "1"
                 },
                 {
                     "name": "flags",
                     "type": "alias",
+                    "since": "v1.4.0",
                     "alias_of": "uint32_t"
                 },
                 {
                     "name": "null_handle",
                     "type": "definition",
+                    "since": "v1.4.0",
                     "value": "0"
                 },
                 {
                     "name": "runtime",
                     "type": "handle",
+                    "since": "v1.4.0",
                     "is_dispatchable": true
                 },
                 {
                     "name": "aot_module",
                     "type": "handle",
-                    "is_dispatchable": true
-                },
-                {
-                    "name": "event",
-                    "type": "handle",
+                    "since": "v1.4.0",
                     "is_dispatchable": true
                 },
                 {
                     "name": "memory",
                     "type": "handle",
+                    "since": "v1.4.0",
                     "is_dispatchable": false
                 },
                 {
                     "name": "image",
                     "type": "handle",
+                    "since": "v1.4.0",
                     "is_dispatchable": false
                 },
                 {
@@ -73,18 +78,20 @@
                 {
                     "name": "kernel",
                     "type": "handle",
+                    "since": "v1.4.0",
                     "is_dispatchable": false
                 },
                 {
                     "name": "compute_graph",
                     "type": "handle",
+                    "since": "v1.4.0",
                     "is_dispatchable": false
                 },
                 {
                     "name": "error",
                     "type": "enumeration",
+                    "since": "v1.4.0",
                     "cases": {
-                        "incomplete": 1,
                         "success": 0,
                         "not_supported": -1,
                         "corrupted_data": -2,
@@ -94,32 +101,69 @@
                         "argument_out_of_range": -6,
                         "argument_not_found": -7,
                         "invalid_interop": -8,
-                        "invalid_state": -9
+                        "invalid_state": -9,
+                        "incompatible_module": -10,
+                        "out_of_memory": -11
                     }
                 },
                 {
                     "name": "arch",
                     "type": "enumeration",
-                    "inc_cases": "PER_ARCH"
+                    "since": "v1.4.0",
+                    "cases": {
+                        "reserved": 0,
+                        "vulkan": 1,
+                        "metal": 2,
+                        "cuda": 3,
+                        "x64": 4,
+                        "arm64": 5,
+                        "opengl": 6,
+                        "gles": 7
+                    }
+                },
+                {
+                    "name": "capability",
+                    "type": "enumeration",
+                    "since": "v1.4.0",
+                    "inc_cases": "PER_DEVICE_CAPABILITY"
+                },
+                {
+                    "name": "capability_level_info",
+                    "type": "structure",
+                    "since": "v1.4.0",
+                    "fields": [
+                        {
+                            "type": "enumeration.capability"
+                        },
+                        {
+                            "name": "level",
+                            "type": "uint32_t"
+                        }
+                    ]
                 },
                 {
                     "name": "data_type",
                     "type": "enumeration",
+                    "since": "v1.4.0",
                     "inc_cases": "PER_TYPE"
                 },
                 {
                     "name": "argument_type",
                     "type": "enumeration",
+                    "since": "v1.4.0",
                     "cases": {
                         "i32": 0,
                         "f32": 1,
                         "ndarray": 2,
-                        "texture": 3
+                        "texture": 3,
+                        "scalar": 4,
+                        "tensor": 5
                     }
                 },
                 {
                     "name": "memory_usage",
                     "type": "bit_field",
+                    "since": "v1.4.0",
                     "bits": {
                         "storage": 0,
                         "uniform": 1,
@@ -130,6 +174,7 @@
                 {
                     "name": "memory_allocate_info",
                     "type": "structure",
+                    "since": "v1.4.0",
                     "fields": [
                         {
                             "name": "size",
@@ -156,6 +201,7 @@
                 {
                     "name": "memory_slice",
                     "type": "structure",
+                    "since": "v1.4.0",
                     "fields": [
                         {
                             "type": "handle.memory"
@@ -173,6 +219,7 @@
                 {
                     "name": "nd_shape",
                     "type": "structure",
+                    "since": "v1.4.0",
                     "fields": [
                         {
                             "name": "dim_count",
@@ -188,6 +235,7 @@
                 {
                     "name": "nd_array",
                     "type": "structure",
+                    "since": "v1.4.0",
                     "fields": [
                         {
                             "name": "memory",
@@ -210,6 +258,7 @@
                 {
                     "name": "image_usage",
                     "type": "bit_field",
+                    "since": "v1.4.0",
                     "bits": {
                         "storage": 0,
                         "sampled": 1,
@@ -219,6 +268,7 @@
                 {
                     "name": "image_dimension",
                     "type": "enumeration",
+                    "since": "v1.4.0",
                     "cases": {
                         "1d": 0,
                         "2d": 1,
@@ -231,16 +281,19 @@
                 {
                     "name": "image_layout",
                     "type": "enumeration",
+                    "since": "v1.4.0",
                     "inc_cases": "PER_IMAGE_LAYOUT"
                 },
                 {
                     "name": "format",
                     "type": "enumeration",
+                    "since": "v1.4.0",
                     "inc_cases": "PER_BUFFER_FORMAT"
                 },
                 {
                     "name": "image_offset",
                     "type": "structure",
+                    "since": "v1.4.0",
                     "fields": [
                         {
                             "name": "x",
@@ -263,6 +316,7 @@
                 {
                     "name": "image_extent",
                     "type": "structure",
+                    "since": "v1.4.0",
                     "fields": [
                         {
                             "name": "width",
@@ -285,6 +339,7 @@
                 {
                     "name": "image_allocate_info",
                     "type": "structure",
+                    "since": "v1.4.0",
                     "fields": [
                         {
                             "name": "dimension",
@@ -315,6 +370,7 @@
                 {
                     "name": "image_slice",
                     "type": "structure",
+                    "since": "v1.4.0",
                     "fields": [
                         {
                             "type": "handle.image"
@@ -368,6 +424,7 @@
                 {
                     "name": "texture",
                     "type": "structure",
+                    "since": "v1.4.0",
                     "fields": [
                         {
                             "name": "image",
@@ -391,8 +448,101 @@
                     ]
                 },
                 {
+                    "name": "scalar_value",
+                    "type": "union",
+                    "since": "v1.5.0",
+                    "variants": [
+                        {
+                            "name": "x8",
+                            "type": "uint8_t"
+                        },
+                        {
+                            "name": "x16",
+                            "type": "uint16_t"
+                        },
+                        {
+                            "name": "x32",
+                            "type": "uint32_t"
+                        },
+                        {
+                            "name": "x64",
+                            "type": "uint64_t"
+                        }
+                    ]
+                },
+                {
+                    "name": "scalar",
+                    "type": "structure",
+                    "since": "v1.5.0",
+                    "fields": [
+                        {
+                            "name": "type",
+                            "type": "enumeration.data_type"
+                        },
+                        {
+                            "name": "value",
+                            "type": "union.scalar_value"
+                        }
+                    ]
+                },
+                {
+                    "name": "tensor_value",
+                    "type": "union",
+                    "variants": [
+                        {
+                            "name": "x8",
+                            "type": "uint8_t",
+                            "count": 128
+                        },
+                        {
+                            "name": "x16",
+                            "type": "uint16_t",
+                            "count": 64
+                        },
+                        {
+                            "name": "x32",
+                            "type": "uint32_t",
+                            "count": 32
+                        },
+                        {
+                            "name": "x64",
+                            "type": "uint64_t",
+                            "count": 16
+                        }
+                    ]
+                },
+                {
+                    "name": "tensor_value_with_length",
+                    "type": "structure",
+                    "fields": [
+                        {
+                            "name": "length",
+                            "type": "uint32_t"
+                        },
+                        {
+                            "name": "data",
+                            "type": "union.tensor_value"
+                        }
+                    ]
+                },
+                {
+                    "name": "tensor",
+                    "type": "structure",
+                    "fields": [
+                        {
+                            "name": "type",
+                            "type": "enumeration.data_type"
+                        },
+                        {
+                            "name": "contents",
+                            "type": "structure.tensor_value_with_length"
+                        }
+                    ]
+                },
+                {
                     "name": "argument_value",
                     "type": "union",
+                    "since": "v1.4.0",
                     "variants": [
                         {
                             "name": "i32",
@@ -409,12 +559,21 @@
                         {
                             "name": "texture",
                             "type": "structure.texture"
+                        },
+                        {
+                            "name": "scalar",
+                            "type": "structure.scalar"
+                        },
+                        {
+                            "name": "tensor",
+                            "type": "structure.tensor"
                         }
                     ]
                 },
                 {
                     "name": "argument",
                     "type": "structure",
+                    "since": "v1.4.0",
                     "fields": [
                         {
                             "name": "type",
@@ -429,6 +588,7 @@
                 {
                     "name": "named_argument",
                     "type": "structure",
+                    "since": "v1.4.0",
                     "fields": [
                         {
                             "name": "name",
@@ -440,8 +600,38 @@
                     ]
                 },
                 {
+                    "name": "get_version",
+                    "type": "function",
+                    "since": "v1.4.0",
+                    "parameters": [
+                        {
+                            "name": "@return",
+                            "type": "uint32_t"
+                        }
+                    ]
+                },
+                {
+                    "name": "get_available_archs",
+                    "type": "function",
+                    "since": "v1.4.0",
+                    "parameters": [
+                        {
+                            "name": "arch_count",
+                            "type": "uint32_t",
+                            "by_mut": true
+                        },
+                        {
+                            "name": "archs",
+                            "type": "enumeration.arch",
+                            "count": "arch_count",
+                            "by_mut": true
+                        }
+                    ]
+                },
+                {
                     "name": "get_last_error",
                     "type": "function",
+                    "since": "v1.4.0",
                     "parameters": [
                         {
                             "name": "@return",
@@ -449,7 +639,8 @@
                         },
                         {
                             "name": "message_size",
-                            "type": "uint64_t"
+                            "type": "uint64_t",
+                            "by_mut": true
                         },
                         {
                             "name": "message",
@@ -462,6 +653,7 @@
                 {
                     "name": "set_last_error",
                     "type": "function",
+                    "since": "v1.4.0",
                     "parameters": [
                         {
                             "type": "enumeration.error"
@@ -475,6 +667,7 @@
                 {
                     "name": "create_runtime",
                     "type": "function",
+                    "since": "v1.4.0",
                     "parameters": [
                         {
                             "name": "@return",
@@ -482,12 +675,17 @@
                         },
                         {
                             "type": "enumeration.arch"
+                        },
+                        {
+                            "name": "device_index",
+                            "type": "uint32_t"
                         }
                     ]
                 },
                 {
                     "name": "destroy_runtime",
                     "type": "function",
+                    "since": "v1.4.0",
                     "parameters": [
                         {
                             "type": "handle.runtime"
@@ -495,8 +693,50 @@
                     ]
                 },
                 {
+                    "name": "set_runtime_capabilities",
+                    "type": "function",
+                    "is_extension": true,
+                    "since": "v1.4.0",
+                    "parameters": [
+                        {
+                            "type": "handle.runtime"
+                        },
+                        {
+                            "name": "capability_count",
+                            "type": "uint32_t"
+                        },
+                        {
+                            "name": "capabilities",
+                            "type": "structure.capability_level_info",
+                            "count": "capability_count"
+                        }
+                    ]
+                },
+                {
+                    "name": "get_runtime_capabilities",
+                    "type": "function",
+                    "since": "v1.4.0",
+                    "parameters": [
+                        {
+                            "type": "handle.runtime"
+                        },
+                        {
+                            "name": "capability_count",
+                            "type": "uint32_t",
+                            "by_mut": true
+                        },
+                        {
+                            "name": "capabilities",
+                            "type": "structure.capability_level_info",
+                            "count": "capability_count",
+                            "by_mut": true
+                        }
+                    ]
+                },
+                {
                     "name": "allocate_memory",
                     "type": "function",
+                    "since": "v1.4.0",
                     "parameters": [
                         {
                             "name": "@return",
@@ -515,6 +755,7 @@
                 {
                     "name": "free_memory",
                     "type": "function",
+                    "since": "v1.4.0",
                     "parameters": [
                         {
                             "type": "handle.runtime"
@@ -527,6 +768,7 @@
                 {
                     "name": "map_memory",
                     "type": "function",
+                    "since": "v1.4.0",
                     "parameters": [
                         {
                             "name": "@return",
@@ -543,6 +785,7 @@
                 {
                     "name": "unmap_memory",
                     "type": "function",
+                    "since": "v1.4.0",
                     "parameters": [
                         {
                             "type": "handle.runtime"
@@ -555,6 +798,7 @@
                 {
                     "name": "allocate_image",
                     "type": "function",
+                    "since": "v1.4.0",
                     "parameters": [
                         {
                             "name": "@return",
@@ -573,6 +817,7 @@
                 {
                     "name": "free_image",
                     "type": "function",
+                    "since": "v1.4.0",
                     "parameters": [
                         {
                             "type": "handle.runtime"
@@ -613,30 +858,9 @@
                     ]
                 },
                 {
-                    "name": "create_event",
-                    "type": "function",
-                    "parameters": [
-                        {
-                            "name": "@return",
-                            "type": "handle.event"
-                        },
-                        {
-                            "type": "handle.runtime"
-                        }
-                    ]
-                },
-                {
-                    "name": "destroy_event",
-                    "type": "function",
-                    "parameters": [
-                        {
-                            "type": "handle.event"
-                        }
-                    ]
-                },
-                {
                     "name": "copy_memory_device_to_device",
                     "type": "function",
+                    "since": "v1.4.0",
                     "is_device_command": true,
                     "parameters": [
                         {
@@ -678,6 +902,7 @@
                     "name": "track_image",
                     "type": "function",
                     "is_extension": true,
+                    "since": "v1.4.0",
                     "parameters": [
                         {
                             "type": "handle.runtime"
@@ -694,6 +919,7 @@
                 {
                     "name": "transition_image",
                     "type": "function",
+                    "since": "v1.4.0",
                     "is_device_command": true,
                     "parameters": [
                         {
@@ -711,6 +937,7 @@
                 {
                     "name": "launch_kernel",
                     "type": "function",
+                    "since": "v1.4.0",
                     "is_device_command": true,
                     "parameters": [
                         {
@@ -733,6 +960,7 @@
                 {
                     "name": "launch_compute_graph",
                     "type": "function",
+                    "since": "v1.4.0",
                     "is_device_command": true,
                     "parameters": [
                         {
@@ -753,47 +981,9 @@
                     ]
                 },
                 {
-                    "name": "signal_event",
+                    "name": "flush",
                     "type": "function",
-                    "is_device_command": true,
-                    "parameters": [
-                        {
-                            "type": "handle.runtime"
-                        },
-                        {
-                            "type": "handle.event"
-                        }
-                    ]
-                },
-                {
-                    "name": "reset_event",
-                    "type": "function",
-                    "is_device_command": true,
-                    "parameters": [
-                        {
-                            "type": "handle.runtime"
-                        },
-                        {
-                            "type": "handle.event"
-                        }
-                    ]
-                },
-                {
-                    "name": "wait_event",
-                    "type": "function",
-                    "is_device_command": true,
-                    "parameters": [
-                        {
-                            "type": "handle.runtime"
-                        },
-                        {
-                            "type": "handle.event"
-                        }
-                    ]
-                },
-                {
-                    "name": "submit",
-                    "type": "function",
+                    "since": "v1.4.0",
                     "parameters": [
                         {
                             "type": "handle.runtime"
@@ -803,6 +993,7 @@
                 {
                     "name": "wait",
                     "type": "function",
+                    "since": "v1.4.0",
                     "parameters": [
                         {
                             "type": "handle.runtime"
@@ -812,6 +1003,7 @@
                 {
                     "name": "load_aot_module",
                     "type": "function",
+                    "since": "v1.4.0",
                     "parameters": [
                         {
                             "name": "@return",
@@ -827,8 +1019,31 @@
                     ]
                 },
                 {
+                    "name": "create_aot_module",
+                    "type": "function",
+                    "since": "v1.4.0",
+                    "parameters": [
+                        {
+                            "name": "@return",
+                            "type": "handle.aot_module"
+                        },
+                        {
+                            "type": "handle.runtime"
+                        },
+                        {
+                            "name": "tcm",
+                            "type": "const void*"
+                        },
+                        {
+                            "name": "size",
+                            "type": "uint64_t"
+                        }
+                    ]
+                },
+                {
                     "name": "destroy_aot_module",
                     "type": "function",
+                    "since": "v1.4.0",
                     "parameters": [
                         {
                             "type": "handle.aot_module"
@@ -838,6 +1053,7 @@
                 {
                     "name": "get_aot_module_kernel",
                     "type": "function",
+                    "since": "v1.4.0",
                     "parameters": [
                         {
                             "name": "@return",
@@ -855,6 +1071,7 @@
                 {
                     "name": "get_aot_module_compute_graph",
                     "type": "function",
+                    "since": "v1.4.0",
                     "parameters": [
                         {
                             "name": "@return",
@@ -872,15 +1089,94 @@
             ]
         },
         {
-            "name": "taichi/taichi_vulkan.h",
+            "name": "taichi/taichi_cpu.h",
             "required_modules": [
-                "taichi/taichi_core.h",
-                "vulkan/vulkan.h"
+                "taichi/taichi_core.h"
+            ],
+            "declarations": [
+                {
+                    "name": "cpu_memory_interop_info",
+                    "type": "structure",
+                    "fields": [
+                        {
+                            "name": "ptr",
+                            "type": "void*"
+                        },
+                        {
+                            "name": "size",
+                            "type": "uint64_t"
+                        }
+                    ]
+                },
+                {
+                    "name": "export_cpu_memory",
+                    "type": "function",
+                    "parameters": [
+                        {
+                            "type": "handle.runtime"
+                        },
+                        {
+                            "type": "handle.memory"
+                        },
+                        {
+                            "name": "interop_info",
+                            "type": "structure.cpu_memory_interop_info",
+                            "by_mut": true
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "taichi/taichi_cuda.h",
+            "required_modules": [
+                "taichi/taichi_core.h"
+            ],
+            "declarations": [
+                {
+                    "name": "cuda_memory_interop_info",
+                    "type": "structure",
+                    "fields": [
+                        {
+                            "name": "ptr",
+                            "type": "void*"
+                        },
+                        {
+                            "name": "size",
+                            "type": "uint64_t"
+                        }
+                    ]
+                },
+                {
+                    "name": "export_cuda_memory",
+                    "type": "function",
+                    "parameters": [
+                        {
+                            "type": "handle.runtime"
+                        },
+                        {
+                            "type": "handle.memory"
+                        },
+                        {
+                            "name": "interop_info",
+                            "type": "structure.cuda_memory_interop_info",
+                            "by_mut": true
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "taichi/taichi_vulkan.h",
+            "doc": "taichi/taichi_vulkan.h.md",
+            "required_modules": [
+                "taichi/taichi_core.h"
             ],
             "declarations": [
                 {
                     "name": "vulkan_runtime_interop_info",
                     "type": "structure",
+                    "since": "v1.4.0",
                     "fields": [
                         {
                             "name": "get_instance_proc_addr",
@@ -923,6 +1219,7 @@
                 {
                     "name": "vulkan_memory_interop_info",
                     "type": "structure",
+                    "since": "v1.4.0",
                     "fields": [
                         {
                             "name": "buffer",
@@ -935,12 +1232,21 @@
                         {
                             "name": "usage",
                             "type": "VkBufferUsageFlags"
+                        },
+                        {
+                            "name": "memory",
+                            "type": "VkDeviceMemory"
+                        },
+                        {
+                            "name": "offset",
+                            "type": "uint64_t"
                         }
                     ]
                 },
                 {
                     "name": "vulkan_image_interop_info",
                     "type": "structure",
+                    "since": "v1.4.0",
                     "fields": [
                         {
                             "name": "image",
@@ -981,19 +1287,10 @@
                     ]
                 },
                 {
-                    "name": "vulkan_event_interop_info",
-                    "type": "structure",
-                    "fields": [
-                        {
-                            "name": "event",
-                            "type": "VkEvent"
-                        }
-                    ]
-                },
-                {
                     "name": "create_vulkan_runtime",
                     "type": "function",
                     "is_extension": true,
+                    "since": "v1.4.0",
                     "parameters": [
                         {
                             "name": "@return",
@@ -1024,6 +1321,7 @@
                 {
                     "name": "import_vulkan_runtime",
                     "type": "function",
+                    "since": "v1.4.0",
                     "parameters": [
                         {
                             "name": "@return",
@@ -1039,6 +1337,7 @@
                 {
                     "name": "export_vulkan_runtime",
                     "type": "function",
+                    "since": "v1.4.0",
                     "parameters": [
                         {
                             "type": "handle.runtime"
@@ -1053,6 +1352,7 @@
                 {
                     "name": "import_vulkan_memory",
                     "type": "function",
+                    "since": "v1.4.0",
                     "parameters": [
                         {
                             "name": "@return",
@@ -1071,6 +1371,7 @@
                 {
                     "name": "export_vulkan_memory",
                     "type": "function",
+                    "since": "v1.4.0",
                     "parameters": [
                         {
                             "type": "handle.runtime"
@@ -1088,6 +1389,7 @@
                 {
                     "name": "import_vulkan_image",
                     "type": "function",
+                    "since": "v1.4.0",
                     "parameters": [
                         {
                             "name": "@return",
@@ -1114,6 +1416,7 @@
                 {
                     "name": "export_vulkan_image",
                     "type": "function",
+                    "since": "v1.4.0",
                     "parameters": [
                         {
                             "type": "handle.runtime"
@@ -1127,38 +1430,329 @@
                             "by_mut": true
                         }
                     ]
+                }
+            ]
+        },
+        {
+            "name": "taichi/taichi_opengl.h",
+            "required_modules": [
+                "taichi/taichi_core.h"
+            ],
+            "declarations": [
+                {
+                    "name": "opengl_runtime_interop_info",
+                    "type": "structure",
+                    "fields": [
+                        {
+                            "name": "get_proc_addr",
+                            "type": "void*"
+                        }
+                    ]
                 },
                 {
-                    "name": "import_vulkan_event",
+                    "name": "opengl_memory_interop_info",
+                    "type": "structure",
+                    "fields": [
+                        {
+                            "name": "buffer",
+                            "type": "GLuint"
+                        },
+                        {
+                            "name": "size",
+                            "type": "GLsizeiptr"
+                        }
+                    ]
+                },
+                {
+                    "name": "opengl_image_interop_info",
+                    "type": "structure",
+                    "fields": [
+                        {
+                            "name": "texture",
+                            "type": "GLuint"
+                        },
+                        {
+                            "name": "target",
+                            "type": "GLenum"
+                        },
+                        {
+                            "name": "levels",
+                            "type": "GLsizei"
+                        },
+                        {
+                            "name": "format",
+                            "type": "GLenum"
+                        },
+                        {
+                            "name": "width",
+                            "type": "GLsizei"
+                        },
+                        {
+                            "name": "height",
+                            "type": "GLsizei"
+                        },
+                        {
+                            "name": "depth",
+                            "type": "GLsizei"
+                        }
+                    ]
+                },
+                {
+                    "name": "import_opengl_runtime",
                     "type": "function",
                     "parameters": [
                         {
                             "name": "@return",
-                            "type": "handle.event"
+                            "type": "handle.runtime"
+                        },
+                        {
+                            "name": "interop_info",
+                            "type": "structure.opengl_runtime_interop_info",
+                            "by_mut": true
+                        }
+                    ]
+                },
+                {
+                    "name": "export_opengl_runtime",
+                    "type": "function",
+                    "parameters": [
+                        {
+                            "type": "handle.runtime"
+                        },
+                        {
+                            "name": "interop_info",
+                            "type": "structure.opengl_runtime_interop_info",
+                            "by_mut": true
+                        }
+                    ]
+                },
+                {
+                    "name": "import_opengl_memory",
+                    "type": "function",
+                    "parameters": [
+                        {
+                            "name": "@return",
+                            "type": "handle.memory"
                         },
                         {
                             "type": "handle.runtime"
                         },
                         {
                             "name": "interop_info",
-                            "type": "structure.vulkan_event_interop_info",
+                            "type": "structure.opengl_memory_interop_info",
                             "by_ref": true
                         }
                     ]
                 },
                 {
-                    "name": "export_vulkan_event",
+                    "name": "export_opengl_memory",
                     "type": "function",
                     "parameters": [
                         {
                             "type": "handle.runtime"
                         },
                         {
-                            "type": "handle.event"
+                            "type": "handle.memory"
                         },
                         {
                             "name": "interop_info",
-                            "type": "structure.vulkan_event_interop_info",
+                            "type": "structure.opengl_memory_interop_info",
+                            "by_mut": true
+                        }
+                    ]
+                },
+                {
+                    "name": "import_opengl_image",
+                    "type": "function",
+                    "parameters": [
+                        {
+                            "name": "@return",
+                            "type": "handle.image"
+                        },
+                        {
+                            "type": "handle.runtime"
+                        },
+                        {
+                            "name": "interop_info",
+                            "type": "structure.opengl_image_interop_info",
+                            "by_ref": true
+                        }
+                    ]
+                },
+                {
+                    "name": "export_opengl_image",
+                    "type": "function",
+                    "parameters": [
+                        {
+                            "type": "handle.runtime"
+                        },
+                        {
+                            "type": "handle.image"
+                        },
+                        {
+                            "name": "interop_info",
+                            "type": "structure.opengl_image_interop_info",
+                            "by_mut": true
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "taichi/taichi_metal.h",
+            "required_modules": [
+                "taichi/taichi_core.h"
+            ],
+            "declarations": [
+                {
+                    "name": "ns_bundle",
+                    "type": "handle",
+                    "is_dispatchable": false
+                },
+                {
+                    "name": "mtl_device",
+                    "type": "handle",
+                    "is_dispatchable": false
+                },
+                {
+                    "name": "mtl_buffer",
+                    "type": "handle",
+                    "is_dispatchable": false
+                },
+                {
+                    "name": "mtl_texture",
+                    "type": "handle",
+                    "is_dispatchable": false
+                },
+                {
+                    "name": "metal_runtime_interop_info",
+                    "type": "structure",
+                    "fields": [
+                        {
+                            "name": "bundle",
+                            "type": "handle.ns_bundle"
+                        },
+                        {
+                            "name": "device",
+                            "type": "handle.mtl_device"
+                        }
+                    ]
+                },
+                {
+                    "name": "metal_memory_interop_info",
+                    "type": "structure",
+                    "fields": [
+                        {
+                            "name": "buffer",
+                            "type": "handle.mtl_buffer"
+                        }
+                    ]
+                },
+                {
+                    "name": "metal_image_interop_info",
+                    "type": "structure",
+                    "fields": [
+                        {
+                            "name": "texture",
+                            "type": "handle.mtl_texture"
+                        }
+                    ]
+                },
+                {
+                    "name": "import_metal_runtime",
+                    "type": "function",
+                    "parameters": [
+                        {
+                            "name": "@return",
+                            "type": "handle.runtime"
+                        },
+                        {
+                            "name": "interop_info",
+                            "type": "structure.metal_runtime_interop_info",
+                            "by_ref": true
+                        }
+                    ]
+                },
+                {
+                    "name": "export_metal_runtime",
+                    "type": "function",
+                    "parameters": [
+                        {
+                            "type": "handle.runtime"
+                        },
+                        {
+                            "name": "interop_info",
+                            "type": "structure.metal_runtime_interop_info",
+                            "by_mut": true
+                        }
+                    ]
+                },
+                {
+                    "name": "import_metal_memory",
+                    "type": "function",
+                    "parameters": [
+                        {
+                            "name": "@return",
+                            "type": "handle.memory"
+                        },
+                        {
+                            "type": "handle.runtime"
+                        },
+                        {
+                            "name": "interop_info",
+                            "type": "structure.metal_memory_interop_info",
+                            "by_ref": true
+                        }
+                    ]
+                },
+                {
+                    "name": "export_metal_memory",
+                    "type": "function",
+                    "parameters": [
+                        {
+                            "type": "handle.runtime"
+                        },
+                        {
+                            "type": "handle.memory"
+                        },
+                        {
+                            "name": "interop_info",
+                            "type": "structure.metal_memory_interop_info",
+                            "by_mut": true
+                        }
+                    ]
+                },
+                {
+                    "name": "import_metal_image",
+                    "type": "function",
+                    "parameters": [
+                        {
+                            "name": "@return",
+                            "type": "handle.image"
+                        },
+                        {
+                            "type": "handle.runtime"
+                        },
+                        {
+                            "name": "interop_info",
+                            "type": "structure.metal_image_interop_info",
+                            "by_ref": true
+                        }
+                    ]
+                },
+                {
+                    "name": "export_metal_image",
+                    "type": "function",
+                    "parameters": [
+                        {
+                            "type": "handle.runtime"
+                        },
+                        {
+                            "type": "handle.image"
+                        },
+                        {
+                            "name": "interop_info",
+                            "type": "structure.metal_image_interop_info",
                             "by_mut": true
                         }
                     ]
@@ -1178,6 +1772,17 @@
                     "is_dispatchable": false
                 },
                 {
+                    "name": "async_task",
+                    "vendor": "unity",
+                    "type": "callback",
+                    "parameters": [
+                        {
+                            "name": "user_data",
+                            "type": "void*"
+                        }
+                    ]
+                },
+                {
                     "name": "import_native_runtime",
                     "vendor": "unity",
                     "type": "function",
@@ -1185,6 +1790,20 @@
                         {
                             "name": "@return",
                             "type": "handle.runtime"
+                        }
+                    ]
+                },
+                {
+                    "name": "enqueue_task_async",
+                    "vendor": "unity",
+                    "type": "function",
+                    "parameters": [
+                        {
+                            "name": "user_data",
+                            "type": "void*"
+                        },
+                        {
+                            "type": "callback.async_task"
                         }
                     ]
                 },

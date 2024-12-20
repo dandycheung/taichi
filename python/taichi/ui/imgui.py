@@ -8,6 +8,7 @@ class Gui:
     Args:
         gui: reference to a `PyGui`.
     """
+
     def __init__(self, gui) -> None:
         self.gui = gui
 
@@ -54,14 +55,15 @@ class Gui:
         self.gui.begin(name, x, y, width, height)
 
     def end(self):
-        """End the description of the current subwindow.
-        """
+        """End the description of the current subwindow."""
         self.gui.end()
 
-    def text(self, text):
-        """Declares a line of text.
-        """
-        self.gui.text(text)
+    def text(self, text, color=None):
+        """Declares a line of text."""
+        if color is None:
+            self.gui.text(text)
+        else:
+            self.gui.text_colored(text, color)
 
     def checkbox(self, text, old_value):
         """Declares a checkbox, and returns whether or not it has been checked.

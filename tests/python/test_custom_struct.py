@@ -1,5 +1,6 @@
 import numpy as np
 from pytest import approx
+from taichi.lang.misc import get_host_arch_list
 
 import taichi as ti
 from tests import test_utils
@@ -9,7 +10,7 @@ from tests import test_utils
 def test_struct_member_access():
     n = 32
 
-    x = ti.Struct.field({"a": ti.f32, "b": ti.f32}, shape=(n, ))
+    x = ti.Struct.field({"a": ti.f32, "b": ti.f32}, shape=(n,))
     y = ti.Struct.field({"a": ti.f32, "b": ti.f32})
 
     ti.root.dense(ti.i, n // 4).dense(ti.i, 4).place(y)
@@ -43,7 +44,7 @@ def test_struct_whole_access():
     n = 32
 
     # also tests implicit cast
-    x = ti.Struct.field({"a": ti.i32, "b": ti.f32}, shape=(n, ))
+    x = ti.Struct.field({"a": ti.i32, "b": ti.f32}, shape=(n,))
     y = ti.Struct.field({"a": ti.f32, "b": ti.i32})
 
     ti.root.dense(ti.i, n // 4).dense(ti.i, 4).place(y)
@@ -56,8 +57,8 @@ def test_struct_whole_access():
     @ti.kernel
     def run_taichi_scope():
         for i in x:
-            # element-wise ops only work in Taichi scope
-            y[i] = x[i] * 2 + 1
+            y[i].a = x[i].a * 2 + 1
+            y[i].b = x[i].b * 2 + 1
 
     def run_python_scope():
         for i in range(n):
@@ -82,11 +83,7 @@ def test_struct_fill():
     n = 32
 
     # also tests implicit cast
-    x = ti.Struct.field({
-        "a": ti.f32,
-        "b": ti.types.vector(3, ti.i32)
-    },
-                        shape=(n, ))
+    x = ti.Struct.field({"a": ti.f32, "b": ti.types.vector(3, ti.i32)}, shape=(n,))
 
     def fill_each():
         x.a.fill(1.0)
@@ -98,7 +95,8 @@ def test_struct_fill():
     @ti.kernel
     def fill_elements():
         for i in x:
-            x[i].fill(i + 0.5)
+            x[i].a = i + 0.5
+            x[i].b.fill(i + 0.5)
 
     fill_each()
     for i in range(n):
@@ -148,7 +146,7 @@ def test_struct_type():
     vec3f = ti.types.vector(3, float)
     line3f = ti.types.struct(linedir=vec3f, length=float)
     mystruct = ti.types.struct(line=line3f, idx=int)
-    x = mystruct.field(shape=(n, ))
+    x = mystruct.field(shape=(n,))
 
     @ti.kernel
     def init_taichi_scope():
@@ -169,13 +167,7 @@ def test_struct_type():
     def run_python_scope():
         for i in range(n):
             v = vec3f(1)
-            x[i] = ti.Struct({
-                "line": {
-                    "linedir": v,
-                    "length": i + 0.5
-                },
-                "idx": i
-            })
+            x[i] = ti.Struct({"line": {"linedir": v, "length": i + 0.5}, "idx": i})
 
     init_taichi_scope()
     for i in range(n):
@@ -204,7 +196,7 @@ def test_struct_type():
         assert x[i].line.length == 5.0
 
 
-@test_utils.test(exclude=ti.cc)
+@test_utils.test()
 def test_dataclass():
     # example struct class type
     vec3f = ti.types.vector(3, float)
@@ -222,9 +214,7 @@ def test_dataclass():
             return 4 * 3.14 * self.radius * self.radius
 
     # test function usage from python scope
-    assert np.isclose(
-        Sphere(center=vec3f(0.0), radius=2.0).py_scope_area(),
-        4.0 * 3.14 * 4.0)
+    assert np.isclose(Sphere(center=vec3f(0.0), radius=2.0).py_scope_area(), 4.0 * 3.14 * 4.0)
 
     # test function usage from taichi scope
     @ti.kernel
@@ -235,7 +225,7 @@ def test_dataclass():
     assert np.isclose(get_area(), 4.0 * 3.14 * 4.0)
 
     # test function usage from taichi scope with field
-    struct_field = Sphere.field(shape=(4, ))
+    struct_field = Sphere.field(shape=(4,))
     struct_field[3] = Sphere(center=vec3f(0.0), radius=2.0)
 
     @ti.kernel
@@ -251,8 +241,8 @@ def test_struct_assign():
     vec3f = ti.types.vector(3, float)
     line3f = ti.types.struct(linedir=vec3f, length=float)
     mystruct = ti.types.struct(line=line3f, idx=int)
-    x = mystruct.field(shape=(n, ))
-    y = line3f.field(shape=(n, ))
+    x = mystruct.field(shape=(n,))
+    y = line3f.field(shape=(n,))
 
     @ti.kernel
     def init():
@@ -310,13 +300,13 @@ def test_compound_type_implicit_cast():
         return s.a + s.b[0] + s.b[1]
 
     int_value = f2i_taichi_scope()
-    assert type(int_value) == int and int_value == 6
+    assert isinstance(int_value, (int, np.integer)) and int_value == 6
     int_value = f2i_python_scope()
-    assert type(int_value) == int and int_value == 6
+    assert isinstance(int_value, (int, np.integer)) and int_value == 6
     float_value = i2f_taichi_scope()
-    assert type(float_value) == float and float_value == approx(6.0, rel=1e-4)
+    assert isinstance(float_value, (float, np.floating)) and float_value == approx(6.0, rel=1e-4)
     float_value = i2f_python_scope()
-    assert type(float_value) == float and float_value == approx(6.0, rel=1e-4)
+    assert isinstance(float_value, (float, np.floating)) and float_value == approx(6.0, rel=1e-4)
 
 
 @test_utils.test()
@@ -345,23 +335,23 @@ def test_local_struct_assign():
 
 @test_utils.test(debug=True)
 def test_copy_python_scope_struct_to_taichi_scope():
-    a = ti.Struct({'a': 2, 'b': 3})
+    a = ti.Struct({"a": 2, "b": 3})
 
     @ti.kernel
     def test():
         b = a
         assert b.a == 2
         assert b.b == 3
-        b = ti.Struct({'a': 3, 'b': 4})
+        b = ti.Struct({"a": 3, "b": 4})
         assert b.a == 3
         assert b.b == 4
 
     test()
 
 
-@test_utils.test(exclude=[ti.cc], debug=True)
+@test_utils.test(debug=True)
 def test_copy_struct_field_element_to_taichi_scope():
-    a = ti.Struct.field({'a': ti.i32, 'b': ti.i32}, shape=())
+    a = ti.Struct.field({"a": ti.i32, "b": ti.i32}, shape=())
     a[None].a = 2
     a[None].b = 3
 
@@ -384,7 +374,7 @@ def test_copy_struct_field_element_to_taichi_scope():
 def test_copy_struct_in_taichi_scope():
     @ti.kernel
     def test():
-        a = ti.Struct({'a': 2, 'b': 3})
+        a = ti.Struct({"a": 2, "b": 3})
         b = a
         assert b.a == 2
         assert b.b == 3
@@ -416,3 +406,38 @@ def test_dataclass():
         assert A.mass == 2.0
 
     test()
+
+
+@test_utils.test(arch=get_host_arch_list())
+def test_name_collision():
+    # https://github.com/taichi-dev/taichi/issues/6652
+    @ti.dataclass
+    class Foo:
+        zoo: ti.f32
+
+    @ti.dataclass
+    class Bar:
+        @ti.func
+        def zoo(self):
+            return 0
+
+    Foo()  # instantiate struct with zoo as member first
+    Bar()  # then instantiate struct with zoo as method
+
+
+@test_utils.test(debug=True)
+def test_dataclass_as_member():
+    # https://github.com/taichi-dev/taichi/issues/6884
+    @ti.dataclass
+    class A:
+        i: int
+        j: float
+
+    @ti.dataclass
+    class B:
+        a1: A
+        a2: A
+
+    a = A(1, 2.0)
+    b = B(a)
+    assert b.a1.i == 1 and b.a1.j == 2.0

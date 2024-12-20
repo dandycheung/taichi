@@ -42,25 +42,28 @@ std::tuple<Expr,
            Expr,
            Expr,
            Expr>
-sifakis_svd_export(ASTBuilder *ast_builder,
-                   const Expr &a00,
-                   const Expr &a01,
-                   const Expr &a02,
-                   const Expr &a10,
-                   const Expr &a11,
-                   const Expr &a12,
-                   const Expr &a20,
-                   const Expr &a21,
-                   const Expr &a22,
-                   int num_iters) {
+sifakis_svd_export(ASTBuilder *ast_builder, const Expr &mat, int num_iters) {
+  auto expanded_exprs = ast_builder->expand_exprs({mat});
+  TI_ASSERT(expanded_exprs.size() == 9);
+
+  Expr a00 = expanded_exprs[0];
+  Expr a01 = expanded_exprs[1];
+  Expr a02 = expanded_exprs[2];
+  Expr a10 = expanded_exprs[3];
+  Expr a11 = expanded_exprs[4];
+  Expr a12 = expanded_exprs[5];
+  Expr a20 = expanded_exprs[6];
+  Expr a21 = expanded_exprs[7];
+  Expr a22 = expanded_exprs[8];
+
   static_assert(sizeof(Tf) == sizeof(Ti), "");
   constexpr Tf Four_Gamma_Squared = 5.82842712474619f;
   constexpr Tf Sine_Pi_Over_Eight = 0.3826834323650897f;
   constexpr Tf Cosine_Pi_Over_Eight = 0.9238795325112867f;
 
-  std::string tb = "";
-  auto Var =
-      std::bind(&ASTBuilder::make_var, ast_builder, std::placeholders::_1, tb);
+  auto Var = [ast_builder](const taichi::lang::Expr &x) {
+    return ast_builder->make_var(x);
+  };
 
   auto Sfour_gamma_squared = Var(Expr(Tf(0.0)));
   auto Ssine_pi_over_eight = Var(Expr(Tf(0.0)));

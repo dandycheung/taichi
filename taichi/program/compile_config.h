@@ -12,16 +12,13 @@ struct CompileConfig {
   bool check_out_of_bound;
   bool validate_autodiff;
   int simd_width;
-  bool lazy_compilation;
   int opt_level;
   int external_optimization_level;
   int max_vector_width;
-  bool packed;
   bool print_preprocessed_ir;
   bool print_ir;
   bool print_accessor_ir;
-  bool print_evaluator_ir;
-  bool print_benchmark_stat;
+  bool print_ir_dbg_info;
   bool serial_schedule;
   bool simplify_before_lower_access;
   bool lower_access;
@@ -37,15 +34,14 @@ struct CompileConfig {
   bool timeline{false};
   bool verbose;
   bool fast_math;
-  bool dynamic_index;
   bool flatten_if;
   bool make_thread_local;
   bool make_block_local;
   bool detect_read_only;
-  bool ndarray_use_cached_allocator;
-  bool use_mesh;
-  bool real_matrix;
   bool real_matrix_scalarize;
+  bool force_scalarize_matrix;
+  bool half2_vectorization;
+  bool make_cpu_multithreading_loop;
   DataType default_fp;
   DataType default_ip;
   DataType default_up;
@@ -68,19 +64,15 @@ struct CompileConfig {
   bool print_struct_llvm_ir;
   bool print_kernel_llvm_ir;
   bool print_kernel_llvm_ir_optimized;
-  bool print_kernel_nvptx;
+  bool print_kernel_asm;
+  bool print_kernel_amdgcn;
 
-  // CUDA backend options:
+  // CUDA/AMDGPU backend options:
   float64 device_memory_GB;
   float64 device_memory_fraction;
 
-  // C backend options:
-  std::string cc_compile_cmd;
-  std::string cc_link_cmd;
-
   // Opengl backend options:
   bool allow_nv_shader_extension{true};
-  bool use_gles{false};
 
   bool quant_opt_store_fusion{true};
   bool quant_opt_atomic_demotion{true};
@@ -108,7 +100,11 @@ struct CompileConfig {
   int num_compile_threads{4};
   std::string vk_api_version;
 
+  size_t cuda_stack_limit{0};
+
   CompileConfig();
+
+  void fit();
 };
 
 extern TI_DLL_EXPORT CompileConfig default_compile_config;

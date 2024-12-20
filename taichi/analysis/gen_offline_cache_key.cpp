@@ -53,9 +53,8 @@ class ASTSerializer : public IRVisitor, public ExpressionVisitor {
   using IRVisitor::visit;
 
  public:
-  ASTSerializer(Program *prog, std::ostream *os)
-      : ExpressionVisitor(true), prog_(prog), os_(os) {
-    this->allow_undefined_visitor = true;
+  explicit ASTSerializer(std::ostream *os) : ExpressionVisitor(false), os_(os) {
+    this->allow_undefined_visitor = false;
   }
 
   void set_ostream(std::ostream *os) {
@@ -83,6 +82,7 @@ class ASTSerializer : public IRVisitor, public ExpressionVisitor {
     emit(expr->dt);
     emit(expr->arg_id);
     emit(expr->is_ptr);
+    emit(expr->create_load);
   }
 
   void visit(TexturePtrExpression *expr) override {
@@ -90,8 +90,7 @@ class ASTSerializer : public IRVisitor, public ExpressionVisitor {
     emit(expr->arg_id);
     emit(expr->num_dims);
     emit(expr->is_storage);
-    emit(expr->num_channels);
-    emit(expr->channel_format);
+    emit(expr->format);
     emit(expr->lod);
   }
 
@@ -133,17 +132,16 @@ class ASTSerializer : public IRVisitor, public ExpressionVisitor {
 
   void visit(InternalFuncCallExpression *expr) override {
     emit(ExprOpCode::InternalFuncCallExpression);
-    emit(expr->func_name);
+    emit(expr->op->name);
     emit(expr->args);
-    emit(expr->with_runtime_context);
   }
 
   void visit(ExternalTensorExpression *expr) override {
     emit(ExprOpCode::ExternalTensorExpression);
     emit(expr->dt);
-    emit(expr->dim);
+    emit(expr->ndim);
     emit(expr->arg_id);
-    emit(expr->element_dim);
+    emit(expr->needs_grad);
   }
 
   void visit(FieldExpression *expr) override {
@@ -169,7 +167,10 @@ class ASTSerializer : public IRVisitor, public ExpressionVisitor {
   void visit(IndexExpression *expr) override {
     emit(ExprOpCode::IndexExpression);
     emit(expr->var);
-    emit(expr->indices.exprs);
+    for (auto &indices : expr->indices_group) {
+      emit(indices.exprs);
+    }
+    emit(expr->ret_shape);
   }
 
   void visit(MatrixExpression *expr) override {
@@ -178,14 +179,6 @@ class ASTSerializer : public IRVisitor, public ExpressionVisitor {
     for (auto elt : expr->elements) {
       emit(elt);
     }
-  }
-
-  void visit(StrideExpression *expr) override {
-    emit(ExprOpCode::StrideExpression);
-    emit(expr->var);
-    emit(expr->indices.exprs);
-    emit(expr->shape);
-    emit(expr->stride);
   }
 
   void visit(RangeAssumptionExpression *expr) override {
@@ -219,7 +212,7 @@ class ASTSerializer : public IRVisitor, public ExpressionVisitor {
     emit(expr->op_type);
     emit(expr->snode);
     emit(expr->indices.exprs);
-    emit(expr->value);
+    emit(expr->values);
   }
 
   void visit(ConstExpression *expr) override {
@@ -233,8 +226,13 @@ class ASTSerializer : public IRVisitor, public ExpressionVisitor {
     emit(expr->axis);
   }
 
-  void visit(FuncCallExpression *expr) override {
-    emit(ExprOpCode::FuncCallExpression);
+  void visit(ExternalTensorBasePtrExpression *expr) override {
+    emit(ExprOpCode::ExternalTensorBasePtrExpression);
+    emit(expr->ptr);
+  }
+
+  void visit(FrontendFuncCallStmt *expr) override {
+    emit(StmtOpCode::FrontendFuncCallStmt);
     emit(expr->func);
     emit(expr->args.exprs);
   }
@@ -267,6 +265,12 @@ class ASTSerializer : public IRVisitor, public ExpressionVisitor {
   void visit(ReferenceExpression *expr) override {
     emit(ExprOpCode::ReferenceExpression);
     emit(expr->var);
+  }
+
+  void visit(GetElementExpression *expr) override {
+    emit(ExprOpCode::GetElementExpression);
+    emit(expr->src);
+    emit(expr->index);
   }
 
   void visit(Block *block) override {
@@ -302,6 +306,7 @@ class ASTSerializer : public IRVisitor, public ExpressionVisitor {
   void visit(FrontendAllocaStmt *stmt) override {
     emit(StmtOpCode::FrontendAllocaStmt);
     emit(stmt->ident);
+    emit(stmt->is_shared);
   }
 
   void visit(FrontendAssertStmt *stmt) override {
@@ -344,9 +349,17 @@ class ASTSerializer : public IRVisitor, public ExpressionVisitor {
     for (const auto &c : stmt->contents) {
       emit(static_cast<std::uint8_t>(c.index()));
       if (std::holds_alternative<Expr>(c)) {
-        emit(std::get<Expr>(c).expr);
+        emit(std::get<Expr>(c));
       } else {
         emit(std::get<std::string>(c));
+      }
+    }
+    for (const auto &f : stmt->formats) {
+      emit(static_cast<std::uint8_t>(f.has_value()));
+      if (f.has_value()) {
+        emit(f.value());
+      } else {
+        emit(0);
       }
     }
   }
@@ -411,8 +424,8 @@ class ASTSerializer : public IRVisitor, public ExpressionVisitor {
     emit(stmt->outputs);
   }
 
-  static void run(Program *prog, IRNode *ast, std::ostream *os) {
-    ASTSerializer serializer(prog, os);
+  static void run(IRNode *ast, std::ostream *os) {
+    ASTSerializer serializer(os);
     ast->accept(&serializer);
     serializer.emit_dependencies();
   }
@@ -431,8 +444,15 @@ class ASTSerializer : public IRVisitor, public ExpressionVisitor {
     // Serialize snode_trees(Temporary: using offline-cache-key of SNode)
     // Note: The result of serializing snode_tree_roots_ is not parsable now
     emit(static_cast<std::size_t>(snode_tree_roots_.size()));
-    for (auto *snode : snode_tree_roots_) {
-      auto key = get_hashed_offline_cache_key_of_snode(snode);
+    for (const auto *snode : snode_tree_roots_) {
+      std::string key;
+      if (snode_key_cache_.find(snode) == snode_key_cache_.end()) {
+        key = get_hashed_offline_cache_key_of_snode(snode);
+        snode_key_cache_[snode] = key;
+      } else {
+        key = snode_key_cache_[snode];
+      }
+      snode_key_cache_[snode] = key;
       emit_bytes(key.c_str(), key.size());
     }
 
@@ -514,13 +534,12 @@ class ASTSerializer : public IRVisitor, public ExpressionVisitor {
     }
   }
 
-  void emit(SNode *snode) {
-    TI_ASSERT(prog_);
+  void emit(const SNode *snode) {
     if (snode) {
       emit(static_cast<std::size_t>(snode->get_snode_tree_id()));
       emit(static_cast<std::size_t>(snode->id));
-      auto *root = prog_->get_snode_root(snode->get_snode_tree_id());
-      snode_tree_roots_.insert(root);
+      const auto *root = snode->get_root();
+      snode_tree_roots_.push_back(root);
     } else {
       emit(std::numeric_limits<std::size_t>::max());
       emit(std::numeric_limits<std::size_t>::max());
@@ -568,7 +587,7 @@ class ASTSerializer : public IRVisitor, public ExpressionVisitor {
       emit(expr.const_value);
       emit(expr.atomic);
       auto *e = expr.expr.get();
-      emit(e->stmt);
+      emit(e->get_flattened_stmt());
       emit(e->attributes);
       emit(e->ret_type);
       expr.expr->accept(this);
@@ -618,9 +637,7 @@ class ASTSerializer : public IRVisitor, public ExpressionVisitor {
   }
 
 #define DEFINE_EMIT_ENUM(EnumType) \
-  void emit(EnumType type) {       \
-    emit_pod(type);                \
-  }
+  void emit(EnumType type) { emit_pod(type); }
 
   DEFINE_EMIT_ENUM(ExprOpCode);
   DEFINE_EMIT_ENUM(StmtOpCode);
@@ -639,20 +656,21 @@ class ASTSerializer : public IRVisitor, public ExpressionVisitor {
   DEFINE_EMIT_ENUM(mesh::MeshRelationType);
   DEFINE_EMIT_ENUM(mesh::ConvType);
   DEFINE_EMIT_ENUM(SNodeGradType);
+  DEFINE_EMIT_ENUM(BufferFormat);
 
 #undef DEFINE_EMIT_ENUM
 
-  Program *prog_{nullptr};
   std::ostream *os_{nullptr};
-  std::unordered_set<SNode *> snode_tree_roots_;
-  std::unordered_map<Function *, std::size_t> real_funcs_;
+  std::vector<const SNode *> snode_tree_roots_;
+  std::unordered_map<const SNode *, std::string> snode_key_cache_;
+  std::map<Function *, std::size_t> real_funcs_;
   std::vector<char> string_pool_;
 };
 
 }  // namespace
 
-void gen_offline_cache_key(Program *prog, IRNode *ast, std::ostream *os) {
-  ASTSerializer::run(prog, ast, os);
+void gen_offline_cache_key(IRNode *ast, std::ostream *os) {
+  ASTSerializer::run(ast, os);
 }
 
 }  // namespace taichi::lang

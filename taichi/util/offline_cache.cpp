@@ -21,23 +21,15 @@ void disable_offline_cache_if_needed(CompileConfig *config) {
 std::string get_cache_path_by_arch(const std::string &base_path, Arch arch) {
   std::string subdir;
   if (arch_uses_llvm(arch)) {
-    subdir = "llvm";
-  } else if (arch == Arch::vulkan || arch == Arch::opengl) {
-    subdir = "gfx";
-  } else if (arch == Arch::metal) {
-    subdir = "metal";
+    subdir = kLlvmCachSubPath;
+  } else if (arch_uses_spirv(arch)) {
+    subdir = kSpirvCacheSubPath;
+  } else if (arch == Arch::dx12) {
+    subdir = "dx12";
   } else {
     return base_path;
   }
   return taichi::join_path(base_path, subdir);
-}
-
-bool enabled_wip_offline_cache(bool enable_hint) {
-  // CompileConfig::offline_cache is a global option to enable offline cache on
-  // all backends To disable WIP offline cache by default & enable when
-  // developing/testing:
-  const char *enable_env = std::getenv("TI_WIP_OFFLINE_CACHE");
-  return enable_hint && enable_env && std::strncmp("1", enable_env, 1) == 0;
 }
 
 std::string mangle_name(const std::string &primal_name,
@@ -91,6 +83,53 @@ bool try_demangle_name(const std::string &mangled_name,
   TI_ASSERT(key.size() == offline_cache_key_length);
   TI_ASSERT(primal_name.size() + key.size() == pos);
   return true;
+}
+
+std::size_t clean_offline_cache_files(const std::string &path) {
+  std::vector<const char *> sub_dirs = {kLlvmCachSubPath, kSpirvCacheSubPath,
+                                        kMetalCacheSubPath};
+
+  auto is_cache_filename = [](const std::string &name) {
+    const auto ext = taichi::filename_extension(name);
+    return ext == kLlvmCacheFilenameBCExt || ext == kLlvmCacheFilenameLLExt ||
+           ext == kSpirvCacheFilenameExt || ext == kMetalCacheFilenameExt ||
+           ext == kTiCacheFilenameExt || ext == "lock" || ext == "tcb";
+  };
+
+  std::size_t count = 0;
+
+  // Temp implementation. We will refactor the offline cache
+  taichi::traverse_directory(
+      path, [&count, &sub_dirs, &is_cache_filename, &path](
+                const std::string &name, bool is_dir) {
+        if (is_dir) {  // ~/.cache/taichi/ticache/llvm ...
+          for (auto subdir : sub_dirs) {
+            auto subpath = taichi::join_path(path, subdir);
+
+            if (taichi::path_exists(subpath)) {
+              taichi::traverse_directory(
+                  subpath, [&count, &is_cache_filename, &subpath](
+                               const std::string &name, bool is_dir) {
+                    if (is_cache_filename(name) && !is_dir) {
+                      const auto fpath = taichi::join_path(subpath, name);
+                      TI_TRACE("Removing {}", fpath);
+                      bool ok = taichi::remove(fpath);
+                      count += ok ? 1 : 0;
+                      TI_WARN_IF(!ok, "Remove {} failed", fpath);
+                    }
+                  });
+            }
+          }
+        } else if (is_cache_filename(name)) {
+          const auto fpath = taichi::join_path(path, name);
+          TI_TRACE("Removing {}", fpath);
+          bool ok = taichi::remove(fpath);
+          count += ok ? 1 : 0;
+          TI_WARN_IF(!ok, "Remove {} failed", fpath);
+        }
+      });
+
+  return count;
 }
 
 }  // namespace taichi::lang::offline_cache

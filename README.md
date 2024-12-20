@@ -7,7 +7,7 @@
 [![downloads](https://pepy.tech/badge/taichi)](https://pepy.tech/project/taichi)
 [![CI](https://github.com/taichi-dev/taichi/actions/workflows/testing.yml/badge.svg)](https://github.com/taichi-dev/taichi/actions/workflows/testing.yml)
 [![Nightly Release](https://github.com/taichi-dev/taichi/actions/workflows/release.yml/badge.svg)](https://github.com/taichi-dev/taichi/actions/workflows/release.yml)
-<a href="https://join.slack.com/t/taichicommunity/shared_invite/zt-14ic8j6no-Fd~wKNpfskXLfqDr58Tddg"><img src="https://img.shields.io/badge/join-us%20on%20slack-gray.svg?longCache=true&logo=slack&colorB=red"></a>
+<a href="https://discord.gg/f25GRdXRfg"><img alt="discord invitation link" src="https://dcbadge.vercel.app/api/server/f25GRdXRfg?style=flat"></a>
 
 ```shell
 pip install taichi  # Install Taichi Lang
@@ -131,11 +131,17 @@ If you wish to try our our experimental features or build Taichi Lang for your o
 - [API Reference](https://docs.taichi-lang.org/api/)
 - [Blog](https://docs.taichi-lang.org/blog)
 
+## Community activity [![Time period](https://images.repography.com/32602247/taichi-dev/taichi/recent-activity/RlhQybvihwEjfE7ngXyQR9tudBDYAvl27v-NVNMxUrg_badge.svg)](https://repography.com)
+[![Timeline graph](https://images.repography.com/32602247/taichi-dev/taichi/recent-activity/RlhQybvihwEjfE7ngXyQR9tudBDYAvl27v-NVNMxUrg_timeline.svg)](https://github.com/taichi-dev/taichi/commits)
+[![Issue status graph](https://images.repography.com/32602247/taichi-dev/taichi/recent-activity/RlhQybvihwEjfE7ngXyQR9tudBDYAvl27v-NVNMxUrg_issues.svg)](https://github.com/taichi-dev/taichi/issues)
+[![Pull request status graph](https://images.repography.com/32602247/taichi-dev/taichi/recent-activity/RlhQybvihwEjfE7ngXyQR9tudBDYAvl27v-NVNMxUrg_prs.svg)](https://github.com/taichi-dev/taichi/pulls)
+[![Trending topics](https://images.repography.com/32602247/taichi-dev/taichi/recent-activity/RlhQybvihwEjfE7ngXyQR9tudBDYAvl27v-NVNMxUrg_words.svg)](https://github.com/taichi-dev/taichi/commits)
+
 ## Contributing
 
 Kudos to all of our amazing contributors! Taichi Lang thrives through open-source. In that spirit, we welcome all kinds of contributions from the community. If you would like to participate, check out the [Contribution Guidelines](CONTRIBUTING.md) first.
 
-<a href="https://github.com/taichi-dev/taichi/graphs/contributors"><img src="https://raw.githubusercontent.com/taichi-dev/public_files/master/taichi/contributors_taichi-dev_taichi_12.png" width="800px"></a>
+<a href="https://github.com/taichi-dev/taichi/graphs/contributors"><img src="https://raw.githubusercontent.com/taichi-dev/public_files/master/taichi/contributors_taichi-dev_taichi_18.png" width="800px"></a>
 
 *Contributor avatars are randomly shuffled.*
 
@@ -147,13 +153,12 @@ See [Apache License](https://github.com/taichi-dev/taichi/blob/master/LICENSE) f
 
 ## Community
 
-### Event
+For more information about the events or community, please refer to [this page](https://github.com/taichi-dev/community)
 
-Voxel Challenge 2022 is open for [submissions](https://github.com/taichi-dev/voxel-challenge/issues/11) until 18th May. Find out more [here](https://github.com/taichi-dev/community/tree/main/events/voxel-challenge).
 
 ### Join our discussions
 
-- [Slack Channel](https://join.slack.com/t/taichicommunity/shared_invite/zt-14ic8j6no-Fd~wKNpfskXLfqDr58Tddg)
+- [Discord](https://discord.gg/f25GRdXRfg)
 - [GitHub Discussions](https://github.com/taichi-dev/taichi/discussions)
 - [太极编程语言中文论坛](https://forum.taichi.graphics/)
 
@@ -164,13 +169,14 @@ Voxel Challenge 2022 is open for [submissions](https://github.com/taichi-dev/vox
 
 ### Contact us
 
-- [Slack](https://taichicommunity.slack.com/join/shared_invite/zt-14ic8j6no-Fd~wKNpfskXLfqDr58Tddg#/shared-invite/email)
-- WeChat: Drop us a message at <a href = "mailto:community@taichi.graphics">community@taichi.graphics</a> first, and we'll follow up.
+- [Discord](https://discord.gg/f25GRdXRfg)
+- [WeChat](https://forum.taichi-lang.cn/t/topic/2884)
 
 ## Reference
 
 ### Demos
 
+- [Nerf with Taichi](https://github.com/taichi-dev/taichi-nerfs)
 - [Taichi Lang examples](https://github.com/taichi-dev/taichi/tree/master/python/taichi/examples)
 - [Advanced Taichi Lang examples](https://github.com/taichi-dev/advanced_examples)
 - [Awesome Taichi](https://github.com/taichi-dev/awesome-taichi)
@@ -178,6 +184,12 @@ Voxel Challenge 2022 is open for [submissions](https://github.com/taichi-dev/vox
 - [Taichi elements](https://github.com/taichi-dev/taichi_elements)
 - [Taichi Houdini](https://github.com/taichi-dev/taichi_houdini)
 - [More...](misc/links.md)
+
+
+### AOT deployment
+
+- [Taichi AOT demos & tutorial](https://github.com/taichi-dev/taichi-aot-demo/)
+
 
 ### Lectures & talks
 

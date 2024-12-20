@@ -12,12 +12,10 @@ endif()
 # 2. Re-implement the legacy CPP tests using googletest
 file(GLOB_RECURSE TAICHI_TESTS_SOURCE
         "tests/cpp/analysis/*.cpp"
-        "tests/cpp/aot/llvm/*.cpp"
         "tests/cpp/backends/*.cpp"
         "tests/cpp/codegen/*.cpp"
         "tests/cpp/common/*.cpp"
         "tests/cpp/ir/*.cpp"
-        "tests/cpp/llvm/*.cpp"
         "tests/cpp/program/*.cpp"
         "tests/cpp/struct/*.cpp"
         "tests/cpp/transforms/*.cpp"
@@ -27,6 +25,11 @@ if (TI_WITH_OPENGL OR TI_WITH_VULKAN)
     file(GLOB TAICHI_TESTS_GFX_UTILS_SOURCE
         "tests/cpp/aot/gfx_utils.cpp")
     list(APPEND TAICHI_TESTS_SOURCE ${TAICHI_TESTS_GFX_UTILS_SOURCE})
+endif()
+
+if(TI_WITH_LLVM)
+  file(GLOB TAICHI_TESTS_LLVM_SOURCE "tests/cpp/aot/llvm/*.cpp" "tests/cpp/llvm/*.cpp")
+  list(APPEND TAICHI_TESTS_SOURCE ${TAICHI_TESTS_LLVM_SOURCE})
 endif()
 
 if(TI_WITH_VULKAN)
@@ -53,9 +56,20 @@ if (WIN32)
     set_target_properties(${TESTS_NAME} PROPERTIES RUNTIME_OUTPUT_DIRECTORY_RELEASE ${TESTS_OUTPUT_DIR})
     set_target_properties(${TESTS_NAME} PROPERTIES RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL ${TESTS_OUTPUT_DIR})
     set_target_properties(${TESTS_NAME} PROPERTIES RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO ${TESTS_OUTPUT_DIR})
+    if (MSVC AND TI_GENERATE_PDB)
+        target_compile_options(${TESTS_NAME} PRIVATE "/Zi")
+        target_link_options(${TESTS_NAME} PRIVATE "/DEBUG")
+        target_link_options(${TESTS_NAME} PRIVATE "/OPT:REF")
+        target_link_options(${TESTS_NAME} PRIVATE "/OPT:ICF")
+    endif()
 endif()
 target_link_libraries(${TESTS_NAME} PRIVATE taichi_core)
 target_link_libraries(${TESTS_NAME} PRIVATE gtest_main)
+target_link_libraries(${TESTS_NAME} PRIVATE taichi_common)
+
+if (TI_WITH_BACKTRACE)
+    target_link_libraries(${TESTS_NAME} PRIVATE ${BACKWARD_ENABLE})
+endif()
 
 if (TI_WITH_OPENGL OR TI_WITH_VULKAN)
   target_link_libraries(${TESTS_NAME} PRIVATE gfx_runtime)
@@ -98,4 +112,8 @@ if (NOT ANDROID)
   )
 endif ()
 
+if(LINUX)
+    target_link_options(${TESTS_NAME} PUBLIC -Wl,--exclude-libs=ALL)
+    target_link_options(${TESTS_NAME} PUBLIC -static-libgcc -static-libstdc++)
+endif()
 add_test(NAME ${TESTS_NAME} COMMAND ${TESTS_NAME})

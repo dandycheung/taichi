@@ -2,14 +2,16 @@
 
 #include "taichi/analysis/offline_cache_util.h"
 #include "taichi/aot/graph_data.h"
+#include "taichi/codegen/spirv/kernel_compiler.h"
+#include "taichi/codegen/spirv/compiled_kernel_data.h"
 #include "taichi/runtime/gfx/aot_module_builder_impl.h"
+#include "taichi/runtime/gfx/kernel_launcher.h"
 #include "taichi/runtime/gfx/snode_tree_manager.h"
 #include "taichi/runtime/gfx/aot_module_loader_impl.h"
 #include "taichi/util/offline_cache.h"
+#include "taichi/rhi/common/host_memory_pool.h"
 
-#if !defined(ANDROID)
-#include "GLFW/glfw3.h"
-#endif
+#include "taichi/rhi/common/window_system.h"
 
 using namespace taichi::lang::vulkan;
 
@@ -63,36 +65,15 @@ std::vector<std::string> get_required_device_extensions() {
   return extensions;
 }
 
-FunctionType register_params_to_executable(
-    gfx::GfxRuntime::RegisterParams &&params,
-    gfx::GfxRuntime *runtime) {
-  auto handle = runtime->register_taichi_kernel(std::move(params));
-  return [runtime, handle](RuntimeContext &ctx) {
-    runtime->launch_kernel(handle, &ctx);
-  };
-}
-
 }  // namespace
 
 VulkanProgramImpl::VulkanProgramImpl(CompileConfig &config)
-    : ProgramImpl(config) {
+    : GfxProgramImpl(config) {
 }
 
-FunctionType VulkanProgramImpl::compile(Kernel *kernel,
-                                        OffloadedStmt *offloaded) {
-  return register_params_to_executable(
-      get_cache_manager()->load_or_compile(config, kernel),
-      vulkan_runtime_.get());
-}
-
-static void glfw_error_callback(int code, const char *description) {
-  TI_WARN("GLFW Error {}: {}", code, description);
-}
-
-void VulkanProgramImpl::materialize_runtime(MemoryPool *memory_pool,
-                                            KernelProfilerBase *profiler,
+void VulkanProgramImpl::materialize_runtime(KernelProfilerBase *profiler,
                                             uint64 **result_buffer_ptr) {
-  *result_buffer_ptr = (uint64 *)memory_pool->allocate(
+  *result_buffer_ptr = (uint64 *)HostMemoryPool::get_instance().allocate(
       sizeof(uint64) * taichi_result_buffer_entries, 8);
 
 // Android is meant to be embedded in other application only so the creation of
@@ -101,9 +82,7 @@ void VulkanProgramImpl::materialize_runtime(MemoryPool *memory_pool,
 #ifndef ANDROID
   GLFWwindow *glfw_window = nullptr;
 
-  if (glfwInit()) {
-    glfwSetErrorCallback(glfw_error_callback);
-
+  if (window_system::glfw_context_acquire()) {
     // glfw init success
     glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
@@ -159,96 +138,25 @@ void VulkanProgramImpl::materialize_runtime(MemoryPool *memory_pool,
   embedded_device_ = std::make_unique<VulkanDeviceCreator>(evd_params);
 
   gfx::GfxRuntime::Params params;
-  params.host_result_buffer = *result_buffer_ptr;
   params.device = embedded_device_->device();
-  vulkan_runtime_ = std::make_unique<gfx::GfxRuntime>(std::move(params));
-  snode_tree_mgr_ =
-      std::make_unique<gfx::SNodeTreeManager>(vulkan_runtime_.get());
-}
-
-void VulkanProgramImpl::compile_snode_tree_types(SNodeTree *tree) {
-  if (vulkan_runtime_) {
-    snode_tree_mgr_->materialize_snode_tree(tree);
-  } else {
-    gfx::CompiledSNodeStructs compiled_structs =
-        gfx::compile_snode_structs(*tree->root());
-    aot_compiled_snode_structs_.push_back(compiled_structs);
-  }
-}
-
-void VulkanProgramImpl::materialize_snode_tree(SNodeTree *tree,
-                                               uint64 *result_buffer) {
-  snode_tree_mgr_->materialize_snode_tree(tree);
-}
-
-std::unique_ptr<AotModuleBuilder> VulkanProgramImpl::make_aot_module_builder() {
-  if (vulkan_runtime_) {
-    return std::make_unique<gfx::AotModuleBuilderImpl>(
-        snode_tree_mgr_->get_compiled_structs(), Arch::vulkan);
-  } else {
-    return std::make_unique<gfx::AotModuleBuilderImpl>(
-        aot_compiled_snode_structs_, Arch::vulkan);
-  }
-}
-
-DeviceAllocation VulkanProgramImpl::allocate_memory_ndarray(
-    std::size_t alloc_size,
-    uint64 *result_buffer) {
-  return get_compute_device()->allocate_memory(
-      {alloc_size, /*host_write=*/false, /*host_read=*/false,
-       /*export_sharing=*/false});
-}
-
-DeviceAllocation VulkanProgramImpl::allocate_texture(
-    const ImageParams &params) {
-  return vulkan_runtime_->create_image(params);
-}
-
-std::unique_ptr<aot::Kernel> VulkanProgramImpl::make_aot_kernel(
-    Kernel &kernel) {
-  auto params = get_cache_manager()->load_or_compile(config, &kernel);
-  return std::make_unique<gfx::KernelImpl>(vulkan_runtime_.get(),
-                                           std::move(params));
+  params.profiler = profiler;
+  runtime_ = std::make_unique<gfx::GfxRuntime>(std::move(params));
+  snode_tree_mgr_ = std::make_unique<gfx::SNodeTreeManager>(runtime_.get());
 }
 
 void VulkanProgramImpl::enqueue_compute_op_lambda(
     std::function<void(Device *device, CommandList *cmdlist)> op,
     const std::vector<ComputeOpImageRef> &image_refs) {
-  vulkan_runtime_->enqueue_compute_op_lambda(op, image_refs);
+  runtime_->enqueue_compute_op_lambda(op, image_refs);
 }
 
-void VulkanProgramImpl::dump_cache_data_to_disk() {
-  const auto &mgr = get_cache_manager();
-  mgr->clean_offline_cache(offline_cache::string_to_clean_cache_policy(
-                               config->offline_cache_cleaning_policy),
-                           config->offline_cache_max_size_of_files,
-                           config->offline_cache_cleaning_factor);
-  mgr->dump_with_merging();
-}
-
-const std::unique_ptr<gfx::CacheManager>
-    &VulkanProgramImpl::get_cache_manager() {
-  if (!cache_manager_) {
-    TI_ASSERT(vulkan_runtime_ && snode_tree_mgr_ && embedded_device_);
-    auto target_device = std::make_unique<aot::TargetDevice>(config->arch);
-    embedded_device_->device()->clone_caps(*target_device);
-    using Mgr = gfx::CacheManager;
-    Mgr::Params params;
-    params.arch = config->arch;
-    params.mode = config->offline_cache ? Mgr::MemAndDiskCache : Mgr::MemCache;
-    params.cache_path = config->offline_cache_file_path;
-    params.runtime = vulkan_runtime_.get();
-    params.target_device = std::move(target_device);
-    params.compiled_structs = &snode_tree_mgr_->get_compiled_structs();
-    cache_manager_ = std::make_unique<gfx::CacheManager>(std::move(params));
-  }
-  return cache_manager_;
+void VulkanProgramImpl::finalize() {
+  GfxProgramImpl::finalize();
+  embedded_device_.reset();
 }
 
 VulkanProgramImpl::~VulkanProgramImpl() {
-  cache_manager_.reset();
-  vulkan_runtime_.reset();
-  embedded_device_.reset();
+  VulkanProgramImpl::finalize();
 }
 
 }  // namespace taichi::lang

@@ -6,6 +6,7 @@
 #include <optional>
 #include <atomic>
 #include <stack>
+#include <shared_mutex>
 
 #define TI_RUNTIME_HOST
 #include "taichi/aot/module_builder.h"
@@ -14,6 +15,7 @@
 #include "taichi/ir/type_factory.h"
 #include "taichi/ir/snode.h"
 #include "taichi/util/lang_util.h"
+#include "taichi/program/argpack.h"
 #include "taichi/program/program_impl.h"
 #include "taichi/program/callable.h"
 #include "taichi/program/function.h"
@@ -22,55 +24,10 @@
 #include "taichi/program/snode_expr_utils.h"
 #include "taichi/program/snode_rw_accessors_bank.h"
 #include "taichi/program/context.h"
-#include "taichi/runtime/runtime.h"
 #include "taichi/struct/snode_tree.h"
-#include "taichi/system/memory_pool.h"
 #include "taichi/system/threading.h"
-#include "taichi/system/unified_allocator.h"
 #include "taichi/program/sparse_matrix.h"
 #include "taichi/ir/mesh.h"
-
-namespace taichi::lang {
-
-struct JITEvaluatorId {
-  std::thread::id thread_id;
-  // Note that on certain backends (e.g. CUDA), functions created in one
-  // thread cannot be used in another. Hence the thread_id member.
-  int op;
-  DataType ret, lhs, rhs;
-  std::string tb;
-  bool is_binary;
-
-  UnaryOpType unary_op() const {
-    TI_ASSERT(!is_binary);
-    return (UnaryOpType)op;
-  }
-
-  BinaryOpType binary_op() const {
-    TI_ASSERT(is_binary);
-    return (BinaryOpType)op;
-  }
-
-  bool operator==(const JITEvaluatorId &o) const {
-    return thread_id == o.thread_id && op == o.op && ret == o.ret &&
-           lhs == o.lhs && rhs == o.rhs && is_binary == o.is_binary &&
-           tb == o.tb;
-  }
-};
-
-}  // namespace taichi::lang
-
-namespace std {
-template <>
-struct hash<taichi::lang::JITEvaluatorId> {
-  std::size_t operator()(
-      taichi::lang::JITEvaluatorId const &id) const noexcept {
-    return ((std::size_t)id.op | (id.ret.hash() << 8) | (id.lhs.hash() << 16) |
-            (id.rhs.hash() << 24) | ((std::size_t)id.is_binary << 31)) ^
-           (std::hash<std::thread::id>{}(id.thread_id) << 32);
-  }
-};
-}  // namespace std
 
 namespace taichi::lang {
 
@@ -92,25 +49,14 @@ class StructCompiler;
 class TI_DLL_EXPORT Program {
  public:
   using Kernel = taichi::lang::Kernel;
-  Callable *current_callable{nullptr};
-  // We let every thread has its own config because the constant folding pass
-  // wants to change the CompileConfig so that it can compile the evaluator,
-  // but we don't want it to change the global config. We will refactor it
-  // later when we make Taichi thread-safe.
-  std::unordered_map<std::thread::id, CompileConfig> configs;
-  std::thread::id main_thread_id_;
-  bool sync{false};  // device/host synchronized?
 
-  uint64 *result_buffer{nullptr};  // Note result_buffer is used by all backends
+  uint64 *result_buffer{nullptr};  // Note that this result_buffer is used
+                                   // only for runtime JIT functions (e.g.
+                                   // `runtime_memory_allocate_aligned`)
 
   std::vector<std::unique_ptr<Kernel>> kernels;
 
   std::unique_ptr<KernelProfilerBase> profiler{nullptr};
-
-  std::unordered_map<JITEvaluatorId, std::unique_ptr<Kernel>>
-      jit_evaluator_cache;
-  std::mutex jit_evaluator_cache_mut;
-  std::atomic<uint32_t> jit_evaluator_id{0};
 
   // Note: for now we let all Programs share a single TypeFactory for smooth
   // migration. In the future each program should have its own copy.
@@ -123,12 +69,8 @@ class TI_DLL_EXPORT Program {
 
   ~Program();
 
-  CompileConfig &this_thread_config() {
-    auto thread_id = std::this_thread::get_id();
-    if (!configs.count(thread_id)) {
-      configs[thread_id] = configs[main_thread_id_];
-    }
-    return configs[thread_id];
+  const CompileConfig &compile_config() const {
+    return compile_config_;
   }
 
   struct KernelProfilerQueryResult {
@@ -172,18 +114,6 @@ class TI_DLL_EXPORT Program {
 
   int get_snode_tree_size();
 
-  void visualize_layout(const std::string &fn);
-
-  Kernel &kernel(const std::function<void()> &body,
-                 const std::string &name = "",
-                 AutodiffMode autodiff_mode = AutodiffMode::kNone) {
-    // Expr::set_allow_store(true);
-    auto func = std::make_unique<Kernel>(*this, body, name, autodiff_mode);
-    // Expr::set_allow_store(false);
-    kernels.emplace_back(std::move(func));
-    return *kernels.back();
-  }
-
   Kernel &kernel(const std::function<void(Kernel *)> &body,
                  const std::string &name = "",
                  AutodiffMode autodiff_mode = AutodiffMode::kNone) {
@@ -196,16 +126,16 @@ class TI_DLL_EXPORT Program {
 
   Function *create_function(const FunctionKey &func_key);
 
-  // TODO: This function is doing two things: 1) compiling CHI IR, and 2)
-  // offloading them to each backend. We should probably separate the logic?
-  // TODO(Lin): remove the offloaded parameter
-  FunctionType compile(Kernel &kernel, OffloadedStmt *offloaded = nullptr);
+  const CompiledKernelData &compile_kernel(const CompileConfig &compile_config,
+                                           const DeviceCapabilityConfig &caps,
+                                           const Kernel &kernel_def);
 
-  std::unique_ptr<aot::Kernel> make_aot_kernel(Kernel &kernel) {
-    return program_impl_->make_aot_kernel(kernel);
+  void launch_kernel(const CompiledKernelData &compiled_kernel_data,
+                     LaunchContextBuilder &ctx);
+
+  DeviceCapabilityConfig get_device_caps() {
+    return program_impl_->get_device_caps();
   }
-
-  void check_runtime_error();
 
   Kernel &get_snode_reader(SNode *snode);
 
@@ -221,8 +151,6 @@ class TI_DLL_EXPORT Program {
   Arch get_host_arch() {
     return host_arch();
   }
-
-  Arch get_accessor_arch();
 
   float64 get_total_compilation_time() {
     return total_compilation_time_;
@@ -293,7 +221,9 @@ class TI_DLL_EXPORT Program {
    */
   SNode *get_snode_root(int tree_id);
 
-  std::unique_ptr<AotModuleBuilder> make_aot_module_builder(Arch arch);
+  std::unique_ptr<AotModuleBuilder> make_aot_module_builder(
+      Arch arch,
+      const std::vector<std::string> &caps);
 
   size_t get_field_in_tree_offset(int tree_id, const SNode *child) {
     return program_impl_->get_field_in_tree_offset(tree_id, child);
@@ -312,9 +242,9 @@ class TI_DLL_EXPORT Program {
   }
 
   // TODO: do we still need result_buffer?
-  DeviceAllocation allocate_memory_ndarray(std::size_t alloc_size,
-                                           uint64 *result_buffer) {
-    return program_impl_->allocate_memory_ndarray(alloc_size, result_buffer);
+  DeviceAllocation allocate_memory_on_device(std::size_t alloc_size,
+                                             uint64 *result_buffer) {
+    return program_impl_->allocate_memory_on_device(alloc_size, result_buffer);
   }
   DeviceAllocation allocate_texture(const ImageParams &params) {
     return program_impl_->allocate_texture(params);
@@ -323,25 +253,42 @@ class TI_DLL_EXPORT Program {
   Ndarray *create_ndarray(
       const DataType type,
       const std::vector<int> &shape,
-      ExternalArrayLayout layout = ExternalArrayLayout::kNull);
+      ExternalArrayLayout layout = ExternalArrayLayout::kNull,
+      bool zero_fill = false,
+      const DebugInfo &dbg_info = DebugInfo());
 
-  Texture *create_texture(const DataType type,
-                          int num_channels,
+  ArgPack *create_argpack(const DataType dt);
+
+  std::string get_kernel_return_data_layout() {
+    return program_impl_->get_kernel_return_data_layout();
+  };
+
+  std::string get_kernel_argument_data_layout() {
+    return program_impl_->get_kernel_argument_data_layout();
+  };
+
+  std::pair<const StructType *, size_t> get_struct_type_with_data_layout(
+      const StructType *old_ty,
+      const std::string &layout);
+
+  std::pair<const ArgPackType *, size_t> get_argpack_type_with_data_layout(
+      const ArgPackType *old_ty,
+      const std::string &layout);
+
+  void delete_ndarray(Ndarray *ndarray);
+
+  void delete_argpack(ArgPack *argpack);
+
+  Texture *create_texture(BufferFormat buffer_format,
                           const std::vector<int> &shape);
 
   intptr_t get_ndarray_data_ptr_as_int(const Ndarray *ndarray);
 
-  void fill_ndarray_fast(Ndarray *ndarray, uint32_t val);
-
-  ASTBuilder *current_ast_builder() {
-    return current_callable ? &current_callable->context->builder() : nullptr;
-  }
+  void fill_ndarray_fast_u32(Ndarray *ndarray, uint32_t val);
 
   Identifier get_next_global_id(const std::string &name = "") {
     return Identifier(global_id_counter_++, name);
   }
-
-  void prepare_runtime_context(RuntimeContext *ctx);
 
   /** Enqueue a custom compute op to the current program execution flow.
    *
@@ -363,7 +310,7 @@ class TI_DLL_EXPORT Program {
    * Please limit its use to LLVM backend only
    */
   ProgramImpl *get_program_impl() {
-    TI_ASSERT(arch_uses_llvm(this_thread_config().arch));
+    TI_ASSERT(arch_uses_llvm(compile_config().arch));
     return program_impl_.get();
   }
 
@@ -375,6 +322,8 @@ class TI_DLL_EXPORT Program {
   // could store ProgramImpl rather than Program.
 
  private:
+  CompileConfig compile_config_;
+
   uint64 ndarray_writer_counter_{0};
   uint64 ndarray_reader_counter_{0};
   int global_id_counter_{0};
@@ -394,8 +343,9 @@ class TI_DLL_EXPORT Program {
   static std::atomic<int> num_instances_;
   bool finalized_{false};
 
-  std::unique_ptr<MemoryPool> memory_pool_{nullptr};
-  std::vector<std::unique_ptr<Ndarray>> ndarrays_;
+  // TODO: Move ndarrays_, argpacks_ and textures_ to be managed by runtime
+  std::unordered_map<void *, std::unique_ptr<Ndarray>> ndarrays_;
+  std::unordered_map<void *, std::unique_ptr<ArgPack>> argpacks_;
   std::vector<std::unique_ptr<Texture>> textures_;
 };
 

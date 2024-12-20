@@ -83,7 +83,7 @@ You can use these types to instantiate vectors/matrices or annotate data types f
 
 ```python
 mat2 = ti.math.mat2
-vec3 = ti.math.mat3
+vec3 = ti.math.vec3
 vec4 = ti.math.vec4
 
 m = mat2(1)  # [[1., 1.], [1., 1.]]
@@ -113,6 +113,8 @@ u = v.rraa  # vec4(1, 1, 2, 2)
 - `ti.Vector` is a function that accepts a 1D array and returns a matrix instance that has only one column. For example, `ti.Vector([1, 2, 3, 4, 5])`.
 - `ti.types.vector` is a function that accepts an integer and a primitive type and returns a vector type. For example: `vec5f = ti.types.vector(5, float)`. `vec5f` can then be used to instantiate 5D vectors or annotate data types of function arguments and struct members:
     ```python
+    vec5f = ti.types.vector(5, float)
+
     @ti.kernel
     def test(v: vec5f):
         print(v.xyz)
@@ -166,18 +168,17 @@ def test():
     x = tm.vec2(1, 1)  # complex number 1+1j
     y = tm.vec2(0, 1)  # complex number 1j
     z = tm.cmul(x, y)  # vec2(-1, 1) = -1+1j
-    w = tm.cdiv(x, y)  #  vec2(2, 0) = 2+0j
+    w = tm.cdiv(x, y)  #  vec2(1, -1) = 1-1j
 ```
 
 You can also compute the power, logarithm, and exponential of a complex number:
 
 
 ```python
-
 @ti.kernel
 def test():
-    x = tm.vec2(1, 1)
-    y = tm.cpow(x, 2)
-    z = tm.clog(x)
-    w = tm.cexp(x)
+    x = tm.vec2(1, 1)  # complex number 1 + 1j
+    y = tm.cpow(x, 2)  # complex number (1 + 1j)**2 = 2j
+    z = tm.clog(x)     # complex number (0.346574 + 0.785398j)
+    w = tm.cexp(x)     # complex number (1.468694 + 2.287355j)
 ```

@@ -33,9 +33,8 @@
 #endif
 
 #include "taichi/rhi/vulkan/vulkan_common.h"
-#if !defined(ANDROID)
-#include <GLFW/glfw3.h>
-#endif
+#include "taichi/rhi/common/window_system.h"
+#include "taichi/common/filesystem.hpp"
 
 #include <stdarg.h>
 
@@ -46,28 +45,25 @@
 
 namespace taichi::ui {
 
-#if !defined(ANDROID)
-inline void initGLFW() {
-  if (!glfwInit()) {
-    printf("cannot initialize GLFW\n");
-    exit(EXIT_FAILURE);
+#define RHI_VERIFY(rhi_call)                                    \
+  {                                                             \
+    taichi::lang::RhiResult r = rhi_call;                       \
+    TI_ASSERT_INFO(r == taichi::lang::RhiResult::success,       \
+                   "`{}` failed, error {}", #rhi_call, int(r)); \
   }
-}
 
-static void glfw_error_callback(int code, const char *description) {
-  printf("GLFW Error %d: %s\n", code, description);
-}
-
+#ifdef TI_WITH_GLFW
 inline GLFWwindow *create_glfw_window_(const std::string &name,
                                        int screenWidth,
                                        int screenHeight,
                                        int window_pos_x,
                                        int window_pos_y,
                                        bool vsync) {
-  initGLFW();
+  if (!taichi::lang::window_system::glfw_context_acquire()) {
+    printf("cannot initialize GLFW\n");
+    exit(EXIT_FAILURE);
+  }
   GLFWwindow *window;
-
-  glfwSetErrorCallback(glfw_error_callback);
 
   glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
   glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
@@ -76,12 +72,8 @@ inline GLFWwindow *create_glfw_window_(const std::string &name,
                             nullptr);
 
   if (!window) {
-    glfwTerminate();
+    taichi::lang::window_system::glfw_context_release();
     exit(EXIT_FAILURE);
-  }
-
-  if (glfwVulkanSupported() != GLFW_TRUE) {
-    printf("GLFW reports no Vulkan support\n");
   }
 
   // Reset the window hints to default
@@ -192,31 +184,9 @@ inline std::string button_id_to_name(int id) {
 }
 #endif
 
-inline int next_power_of_2(int n) {
-  int count = 0;
-
-  if (n && !(n & (n - 1)))
-    return n;
-
-  while (n != 0) {
-    n >>= 1;
-    count += 1;
-  }
-
-  return 1 << count;
-}
-
-#define DEFINE_PROPERTY(Type, name)       \
-  Type name;                              \
-  void set_##name(const Type &new_name) { \
-    name = new_name;                      \
-  }                                       \
-  Type get_##name() {                     \
-    return name;                          \
-  }
-
 inline std::vector<char> read_file(const std::string &filename) {
-  std::ifstream file(filename, std::ios::ate | std::ios::binary);
+  std::ifstream file(std::filesystem::path{filename},
+                     std::ios::ate | std::ios::binary);
 
   if (!file.is_open()) {
     throw std::runtime_error(filename + " failed to open file!");

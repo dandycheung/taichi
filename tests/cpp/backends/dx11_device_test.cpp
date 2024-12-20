@@ -6,7 +6,6 @@
 #include "taichi/rhi/dx/dx_device.h"
 #include "taichi/rhi/dx/dx_info_queue.h"
 #include "taichi/runtime/program_impls/dx/dx_program.h"
-#include "taichi/system/memory_pool.h"
 #include "tests/cpp/program/test_program.h"
 
 namespace taichi::lang {
@@ -38,8 +37,8 @@ TEST(Dx11DeviceCreationTest, CreateDeviceAndAllocateMemory) {
   params.size = 1048576;
   params.host_read = true;
   params.host_write = true;
-  const taichi::lang::DeviceAllocation device_alloc =
-      device->allocate_memory(params);
+  taichi::lang::DeviceAllocation device_alloc;
+  EXPECT_EQ(device->allocate_memory(params, &device_alloc), RhiResult::success);
 
   // The purpose of the device_alloc_guard is to rule out double free
   const taichi::lang::DeviceAllocationGuard device_alloc_guard(device_alloc);
@@ -50,14 +49,17 @@ TEST(Dx11DeviceCreationTest, CreateDeviceAndAllocateMemory) {
   }
 
   // Map to CPU, write some values, then check those values
-  void *mapped = device->map(device_alloc);
+  void *mapped;
+  EXPECT_TRUE(device->map(device_alloc, &mapped) ==
+              taichi::lang::RhiResult::success);
   int *mapped_int = reinterpret_cast<int *>(mapped);
   for (int i = 0; i < 100; i++) {
     mapped_int[i] = i;
   }
   device->unmap(device_alloc);
 
-  mapped = device->map(device_alloc);
+  EXPECT_TRUE(device->map(device_alloc, &mapped) ==
+              taichi::lang::RhiResult::success);
   mapped_int = reinterpret_cast<int *>(mapped);
   for (int i = 0; i < 100; i++) {
     EXPECT_EQ(mapped_int[i], i);
@@ -115,14 +117,15 @@ TEST(Dx11StreamTest, CommandListTest) {
       std::make_unique<directx11::Dx11Device>();
   std::unique_ptr<Dx11Stream> stream =
       std::make_unique<Dx11Stream>(device.get());
-  stream->new_command_list();
+  CommandList *cmdlist{nullptr};
+  EXPECT_EQ(stream->new_command_list(&cmdlist), RhiResult::success);
+  EXPECT_NE(cmdlist, nullptr);
 }
 
 TEST(Dx11ProgramTest, MaterializeRuntimeTest) {
   std::unique_ptr<directx11::Dx11Device> device =
       std::make_unique<directx11::Dx11Device>();
-  std::unique_ptr<MemoryPool> pool =
-      std::make_unique<MemoryPool>(Arch::dx11, device.get());
+
   std::unique_ptr<Dx11ProgramImpl> program =
       std::make_unique<Dx11ProgramImpl>(default_compile_config);
   /*
@@ -137,18 +140,20 @@ TEST(Dx11ProgramTest, MaterializeRuntimeTest) {
         - Dx11Stream::submit_synced
   */
   uint64_t *result_buffer;
-  program->materialize_runtime(pool.get(), nullptr, &result_buffer);
+  program->materialize_runtime(nullptr, &result_buffer);
 
   TestProgram test_prog;
-  test_prog.setup();
+  test_prog.setup(Arch::dx11);
 
   IRBuilder builder;
   auto *lhs = builder.get_int32(42);
 
   auto block = builder.extract_ir();
-  test_prog.prog()->this_thread_config().arch = Arch::dx11;
   auto ker = std::make_unique<Kernel>(*test_prog.prog(), std::move(block));
-  program->compile(ker.get(), nullptr);
+  ker->finalize_rets();
+  ker->finalize_params();
+  program->get_kernel_compilation_manager().load_or_compile(
+      *program->config, program->get_device_caps(), *ker.get());
 }
 
 }  // namespace directx11

@@ -13,17 +13,23 @@ namespace py = pybind11;
 
 #include "taichi/ui/utils/utils.h"
 #include "taichi/ui/common/window_base.h"
-#include "taichi/ui/backends/vulkan/window.h"
+#include "taichi/ui/ggui/window.h"
 #include "taichi/ui/common/canvas_base.h"
 #include "taichi/ui/common/camera.h"
-#include "taichi/ui/backends/vulkan/canvas.h"
-#include "taichi/ui/backends/vulkan/scene.h"
+#include "taichi/ui/ggui/canvas.h"
+#include "taichi/ui/ggui/scene.h"
 #include "taichi/rhi/vulkan/vulkan_loader.h"
 #include "taichi/rhi/arch.h"
 #include "taichi/program/field_info.h"
 #include "taichi/ui/common/gui_base.h"
 #include "taichi/program/ndarray.h"
 #include <memory>
+
+#ifndef TI_WITH_LLVM
+#if defined(_WIN64)
+typedef signed __int64 ssize_t;
+#endif /* _WIN64 */
+#endif /* TI_WITH_LLVM */
 
 namespace taichi::ui {
 
@@ -62,6 +68,9 @@ struct PyGui {
   }
   void text(std::string text) {
     gui->text(text);
+  }
+  void text_colored(std::string text, py::tuple color) {
+    gui->text(text, tuple_to_vec3(color));
   }
   bool checkbox(std::string name, bool old_value) {
     return gui->checkbox(name, old_value);
@@ -200,6 +209,7 @@ struct PyScene {
 
   void particles(FieldInfo vbo,
                  bool has_per_vertex_color,
+                 bool has_per_vertex_radius,
                  py::tuple color_,
                  float radius,
                  float draw_vertex_count,
@@ -208,6 +218,7 @@ struct PyScene {
     renderable_info.vbo = vbo;
     renderable_info.has_user_customized_draw = true;
     renderable_info.has_per_vertex_color = has_per_vertex_color;
+    renderable_info.has_per_vertex_radius = has_per_vertex_radius;
     renderable_info.draw_vertex_count = (int)draw_vertex_count;
     renderable_info.draw_first_vertex = (int)draw_first_vertex;
 
@@ -278,6 +289,149 @@ struct PyScene {
   }
 };
 
+struct PySceneV2 {
+  SceneBase *scene;  // not owned
+
+  void set_camera(PyCamera camera) {
+    scene->set_camera(camera.camera);
+  }
+
+  void lines(FieldInfo vbo,
+             FieldInfo indices,
+             bool has_per_vertex_color,
+             py::tuple color_,
+             float width,
+             float draw_index_count,
+             float draw_first_index,
+             float draw_vertex_count,
+             float draw_first_vertex) {
+    RenderableInfo renderable_info;
+    renderable_info.vbo = vbo;
+    renderable_info.indices = indices;
+    renderable_info.has_per_vertex_color = has_per_vertex_color;
+    renderable_info.has_user_customized_draw = true;
+    renderable_info.draw_index_count = (int)draw_index_count;
+    renderable_info.draw_first_index = (int)draw_first_index;
+    renderable_info.draw_vertex_count = (int)draw_vertex_count;
+    renderable_info.draw_first_vertex = (int)draw_first_vertex;
+
+    SceneLinesInfo info;
+    info.renderable_info = renderable_info;
+    info.color = tuple_to_vec3(color_);
+    info.width = width;
+
+    return scene->lines(info);
+  }
+
+  void mesh(FieldInfo vbo,
+            bool has_per_vertex_color,
+            FieldInfo indices,
+            py::tuple color,
+            bool two_sided,
+            float draw_index_count,
+            float draw_first_index,
+            float draw_vertex_count,
+            float draw_first_vertex,
+            bool show_wireframe) {
+    RenderableInfo renderable_info;
+    renderable_info.vbo = vbo;
+    renderable_info.has_per_vertex_color = has_per_vertex_color;
+    renderable_info.indices = indices;
+    renderable_info.has_user_customized_draw = true;
+    renderable_info.draw_index_count = (int)draw_index_count;
+    renderable_info.draw_first_index = (int)draw_first_index;
+    renderable_info.draw_vertex_count = (int)draw_vertex_count;
+    renderable_info.draw_first_vertex = (int)draw_first_vertex;
+    renderable_info.display_mode = show_wireframe
+                                       ? taichi::lang::PolygonMode::Line
+                                       : taichi::lang::PolygonMode::Fill;
+
+    MeshInfo info;
+    info.renderable_info = renderable_info;
+    info.color = tuple_to_vec3(color);
+    info.two_sided = two_sided;
+
+    scene->mesh(info);
+  }
+
+  void particles(FieldInfo vbo,
+                 bool has_per_vertex_color,
+                 bool has_per_vertex_radius,
+                 py::tuple color_,
+                 float radius,
+                 float draw_vertex_count,
+                 float draw_first_vertex) {
+    RenderableInfo renderable_info;
+    renderable_info.vbo = vbo;
+    renderable_info.has_user_customized_draw = true;
+    renderable_info.has_per_vertex_color = has_per_vertex_color;
+    renderable_info.has_per_vertex_radius = has_per_vertex_radius;
+    renderable_info.draw_vertex_count = (int)draw_vertex_count;
+    renderable_info.draw_first_vertex = (int)draw_first_vertex;
+
+    ParticlesInfo info;
+    info.renderable_info = renderable_info;
+    info.color = tuple_to_vec3(color_);
+    info.radius = radius;
+
+    scene->particles(info);
+  }
+
+  void mesh_instance(FieldInfo vbo,
+                     bool has_per_vertex_color,
+                     FieldInfo indices,
+                     py::tuple color,
+                     bool two_sided,
+                     FieldInfo transforms,
+                     float draw_instance_count,
+                     float draw_first_instance,
+                     float draw_index_count,
+                     float draw_first_index,
+                     float draw_vertex_count,
+                     float draw_first_vertex,
+                     bool show_wireframe) {
+    RenderableInfo renderable_info;
+    renderable_info.vbo = vbo;
+    renderable_info.has_per_vertex_color = has_per_vertex_color;
+    renderable_info.indices = indices;
+    renderable_info.has_user_customized_draw = true;
+    renderable_info.draw_index_count = (int)draw_index_count;
+    renderable_info.draw_first_index = (int)draw_first_index;
+    renderable_info.draw_vertex_count = (int)draw_vertex_count;
+    renderable_info.draw_first_vertex = (int)draw_first_vertex;
+    renderable_info.display_mode = show_wireframe
+                                       ? taichi::lang::PolygonMode::Line
+                                       : taichi::lang::PolygonMode::Fill;
+
+    MeshInfo info;
+    info.renderable_info = renderable_info;
+    info.color = tuple_to_vec3(color);
+    info.two_sided = two_sided;
+    if (transforms.valid) {
+      info.start_instance = (int)draw_first_instance;
+      info.num_instances =
+          (draw_instance_count + info.start_instance) > transforms.shape[0]
+              ? (transforms.shape[0] - info.start_instance)
+              : (int)draw_instance_count;
+    }
+    info.mesh_attribute_info.mesh_attribute = transforms;
+    info.mesh_attribute_info.has_attribute = transforms.valid;
+
+    scene->mesh(info);
+  }
+
+  void point_light(py::tuple pos_, py::tuple color_) {
+    glm::vec3 pos = tuple_to_vec3(pos_);
+    glm::vec3 color = tuple_to_vec3(color_);
+    scene->point_light(pos, color);
+  }
+
+  void ambient_light(py::tuple color_) {
+    glm::vec3 color = tuple_to_vec3(color_);
+    scene->ambient_light(color);
+  }
+};
+
 struct PyCanvas {
   CanvasBase *canvas;  // not owned
 
@@ -295,6 +449,10 @@ struct PyCanvas {
   }
 
   void scene(PyScene &scene) {
+    canvas->scene(scene.scene);
+  }
+
+  void scene_v2(PySceneV2 &scene) {
     canvas->scene(scene.scene);
   }
 
@@ -334,11 +492,13 @@ struct PyCanvas {
 
   void circles(FieldInfo vbo,
                bool has_per_vertex_color,
+               bool has_per_vertex_radius,
                py::tuple color_,
                float radius) {
     RenderableInfo renderable_info;
     renderable_info.vbo = vbo;
     renderable_info.has_per_vertex_color = has_per_vertex_color;
+    renderable_info.has_per_vertex_radius = has_per_vertex_radius;
 
     CirclesInfo info;
     info.renderable_info = renderable_info;
@@ -358,9 +518,22 @@ struct PyWindow {
            py::tuple pos,
            bool vsync,
            bool show_window,
+           double fps_limit,
            std::string package_path,
-           Arch ti_arch,
-           bool is_packed_mode) {
+           Arch ti_arch) {
+    Arch ggui_arch = Arch::vulkan;
+
+    if (ti_arch == Arch::metal) {
+      ggui_arch = Arch::metal;
+    }
+
+    if (ggui_arch == Arch::vulkan) {
+      // Verify vulkan available
+      if (!lang::vulkan::is_vulkan_api_available()) {
+        throw std::runtime_error("Vulkan must be available for GGUI");
+      }
+    }
+
     AppConfig config = {name,
                         res[0].cast<int>(),
                         res[1].cast<int>(),
@@ -368,18 +541,11 @@ struct PyWindow {
                         pos[1].cast<int>(),
                         vsync,
                         show_window,
+                        fps_limit,
                         package_path,
                         ti_arch,
-                        is_packed_mode};
-    // todo: support other ggui backends
-    if (!(taichi::arch_is_cpu(ti_arch) || ti_arch == Arch::vulkan ||
-          ti_arch == Arch::cuda)) {
-      throw std::runtime_error(
-          "GGUI is only supported on cpu, vulkan and cuda backends");
-    }
-    if (!lang::vulkan::is_vulkan_api_available()) {
-      throw std::runtime_error("Vulkan must be available for GGUI");
-    }
+                        ggui_arch};
+
     window = std::make_unique<vulkan::Window>(prog, config);
   }
 
@@ -464,8 +630,13 @@ struct PyWindow {
     return canvas;
   }
 
-  PyGui GUI() {
-    PyGui gui = {window->GUI()};
+  PySceneV2 get_scene() {
+    PySceneV2 scene = {window->get_scene()};
+    return scene;
+  }
+
+  PyGui gui() {
+    PyGui gui = {window->gui()};
     return gui;
   }
 
@@ -489,8 +660,9 @@ void export_ggui(py::module &m) {
 
   py::class_<PyWindow>(m, "PyWindow")
       .def(py::init<Program *, std::string, py::tuple, py::tuple, bool, bool,
-                    std::string, Arch, bool>())
+                    double, std::string, Arch>())
       .def("get_canvas", &PyWindow::get_canvas)
+      .def("get_scene", &PyWindow::get_scene)
       .def("show", &PyWindow::show)
       .def("get_window_shape", &PyWindow::get_window_shape)
       .def("write_image", &PyWindow::write_image)
@@ -506,7 +678,7 @@ void export_ggui(py::module &m) {
       .def("get_current_event", &PyWindow::get_current_event)
       .def("set_current_event", &PyWindow::set_current_event)
       .def("destroy", &PyWindow::destroy)
-      .def("GUI", &PyWindow::GUI);
+      .def("GUI", &PyWindow::gui);
 
   py::class_<PyCanvas>(m, "PyCanvas")
       .def("set_background_color", &PyCanvas::set_background_color)
@@ -515,12 +687,14 @@ void export_ggui(py::module &m) {
       .def("triangles", &PyCanvas::triangles)
       .def("lines", &PyCanvas::lines)
       .def("circles", &PyCanvas::circles)
-      .def("scene", &PyCanvas::scene);
+      .def("scene", &PyCanvas::scene)
+      .def("scene_v2", &PyCanvas::scene_v2);
 
   py::class_<PyGui>(m, "PyGui")
       .def("begin", &PyGui::begin)
       .def("end", &PyGui::end)
       .def("text", &PyGui::text)
+      .def("text_colored", &PyGui::text_colored)
       .def("checkbox", &PyGui::checkbox)
       .def("slider_int", &PyGui::slider_int)
       .def("slider_float", &PyGui::slider_float)
@@ -536,6 +710,15 @@ void export_ggui(py::module &m) {
       .def("mesh_instance", &PyScene::mesh_instance)
       .def("point_light", &PyScene::point_light)
       .def("ambient_light", &PyScene::ambient_light);
+
+  py::class_<PySceneV2>(m, "PySceneV2")
+      .def("set_camera", &PySceneV2::set_camera)
+      .def("lines", &PySceneV2::lines)
+      .def("mesh", &PySceneV2::mesh)
+      .def("particles", &PySceneV2::particles)
+      .def("mesh_instance", &PySceneV2::mesh_instance)
+      .def("point_light", &PySceneV2::point_light)
+      .def("ambient_light", &PySceneV2::ambient_light);
 
   py::class_<PyCamera>(m, "PyCamera")
       .def(py::init<>())
@@ -558,18 +741,15 @@ void export_ggui(py::module &m) {
 
   py::class_<FieldInfo>(m, "FieldInfo")
       .def(py::init<>())
-      .def_property("field_type", &FieldInfo::get_field_type,
-                    &FieldInfo::set_field_type)
-      .def_property("matrix_rows", &FieldInfo::get_matrix_rows,
-                    &FieldInfo::set_matrix_rows)
-      .def_property("matrix_cols", &FieldInfo::get_field_type,
-                    &FieldInfo::set_matrix_cols)
-      .def_property("dtype", &FieldInfo::get_dtype, &FieldInfo::set_dtype)
+      .def_property("valid", &FieldInfo::get_valid, &FieldInfo::set_valid)
+      .def_property("num_elements", &FieldInfo::get_num_elements,
+                    &FieldInfo::set_num_elements)
+      .def_property("shape", &FieldInfo::get_shape, &FieldInfo::set_shape)
       .def_property("field_source", &FieldInfo::get_field_source,
                     &FieldInfo::set_field_source)
-      .def_property("snode", &FieldInfo::get_snode, &FieldInfo::set_snode)
-      .def_property("shape", &FieldInfo::get_shape, &FieldInfo::set_shape)
-      .def_property("valid", &FieldInfo::get_valid, &FieldInfo::set_valid);
+      .def_property("dtype", &FieldInfo::get_dtype, &FieldInfo::set_dtype)
+      .def_property("dev_alloc", &FieldInfo::get_dev_alloc,
+                    &FieldInfo::set_dev_alloc);
 
   py::enum_<EventType>(m, "EventType")
       .value("Any", EventType::Any)
@@ -578,14 +758,8 @@ void export_ggui(py::module &m) {
       .export_values();
 
   py::enum_<FieldSource>(m, "FieldSource")
-      .value("TaichiCuda", FieldSource::TaichiCuda)
-      .value("TaichiX64", FieldSource::TaichiX64)
-      .value("TaichiVulkan", FieldSource::TaichiVulkan)
-      .export_values();
-
-  py::enum_<FieldType>(m, "FieldType")
-      .value("Scalar", FieldType::Scalar)
-      .value("Matrix", FieldType::Matrix)
+      .value("TaichiNDarray", FieldSource::TaichiNDarray)
+      .value("HostMappedPtr", FieldSource::HostMappedPtr)
       .export_values();
 
   py::enum_<ProjectionMode>(m, "ProjectionMode")

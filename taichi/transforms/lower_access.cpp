@@ -45,14 +45,11 @@ class LowerAccess : public IRVisitor {
   StructForStmt *current_struct_for;
   const std::vector<SNode *> &kernel_forces_no_activate;
   bool lower_atomic_ptr;
-  bool packed;
 
   LowerAccess(const std::vector<SNode *> &kernel_forces_no_activate,
-              bool lower_atomic_ptr,
-              bool packed)
+              bool lower_atomic_ptr)
       : kernel_forces_no_activate(kernel_forces_no_activate),
-        lower_atomic_ptr(lower_atomic_ptr),
-        packed(packed) {
+        lower_atomic_ptr(lower_atomic_ptr) {
     // TODO: change this to false
     allow_undefined_visitor = true;
     current_struct_for = nullptr;
@@ -98,9 +95,8 @@ class LowerAccess : public IRVisitor {
       // For ti.is_active
       TI_ASSERT(!activate);
     }
-    PtrLowererImpl lowerer{ptr->snode, ptr->indices,
-                           snode_op,   ptr->is_bit_vectorized,
-                           &lowered,   packed};
+    PtrLowererImpl lowerer{ptr->snode, ptr->indices, snode_op,
+                           ptr->is_bit_vectorized, &lowered};
     lowerer.set_pointer_needs_activation(activate);
     lowerer.set_lower_access(this);
     lowerer.run();
@@ -114,8 +110,14 @@ class LowerAccess : public IRVisitor {
           TypeFactory::get_instance().get_pointer_type(parent_ret_type);
       lowered_ptr->ret_type = DataType(ptr_ret_type);
     } else {
-      lowered_ptr->ret_type = ptr->snode->dt;
+      auto ret_type = TypeFactory::get_instance().get_pointer_type(
+          ptr->ret_type.ptr_removed(), ptr->snode->is_bit_level);
+      lowered_ptr->ret_type = ret_type;
+      if (auto get_ch_ptr = lowered_ptr->cast<GetChStmt>()) {
+        get_ch_ptr->overrided_dtype = ret_type;
+      }
     }
+
     return lowered;
   }
 
@@ -195,9 +197,8 @@ class LowerAccess : public IRVisitor {
 
   static bool run(IRNode *node,
                   const std::vector<SNode *> &kernel_forces_no_activate,
-                  bool lower_atomic,
-                  bool packed) {
-    LowerAccess inst(kernel_forces_no_activate, lower_atomic, packed);
+                  bool lower_atomic) {
+    LowerAccess inst(kernel_forces_no_activate, lower_atomic);
     bool modified = false;
     while (true) {
       node->accept(&inst);
@@ -288,8 +289,8 @@ namespace irpass {
 bool lower_access(IRNode *root,
                   const CompileConfig &config,
                   const LowerAccessPass::Args &args) {
-  bool modified = LowerAccess::run(root, args.kernel_forces_no_activate,
-                                   args.lower_atomic, config.packed);
+  bool modified =
+      LowerAccess::run(root, args.kernel_forces_no_activate, args.lower_atomic);
   type_check(root, config);
   return modified;
 }

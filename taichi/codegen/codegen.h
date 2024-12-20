@@ -7,10 +7,10 @@
 #ifdef TI_WITH_LLVM
 #include "llvm/IR/Module.h"
 #include "taichi/codegen/llvm/codegen_llvm.h"
-#include "taichi/runtime/llvm/launch_arg_info.h"
 #include "taichi/codegen/llvm/llvm_codegen_utils.h"
 #endif
 namespace taichi::lang {
+class TaichiLLVMContext;
 
 /*
  [Note] Codegen of LLVM-based backends
@@ -38,57 +38,50 @@ namespace taichi::lang {
 class KernelCodeGen {
  protected:
   Program *prog;
-  Kernel *kernel;
+  const Kernel *kernel;
   IRNode *ir;
 
  public:
-  KernelCodeGen(Kernel *kernel, IRNode *ir);
+  explicit KernelCodeGen(const CompileConfig &compile_config,
+                         const Kernel *kernel,
+                         IRNode *ir,
+                         TaichiLLVMContext &tlctx);
 
   virtual ~KernelCodeGen() = default;
 
-  static std::unique_ptr<KernelCodeGen> create(Arch arch,
-                                               Kernel *kernel,
-                                               Stmt *stmt = nullptr);
-
-  virtual FunctionType compile_to_function() = 0;
-  virtual bool supports_offline_cache() const {
-    return false;
-  }
+  static std::unique_ptr<KernelCodeGen> create(
+      const CompileConfig &compile_config,
+      const Kernel *kernel,
+      IRNode *ir,
+      TaichiLLVMContext &tlctx);
 
 #ifdef TI_WITH_LLVM
   virtual LLVMCompiledKernel compile_kernel_to_module();
 
   virtual LLVMCompiledTask compile_task(
+      int task_codegen_id,
+      const CompileConfig &config,
       std::unique_ptr<llvm::Module> &&module = nullptr,
-      OffloadedStmt *stmt = nullptr){TI_NOT_IMPLEMENTED}
-
-  std::optional<LLVMCompiledKernel> maybe_read_compilation_from_cache(
-      const std::string &kernel_key);
-  void cache_kernel(const std::string &kernel_key,
-                    const LLVMCompiledKernel &data);
-#endif
-};
-
-#ifdef TI_WITH_LLVM
-
-class ModuleToFunctionConverter {
- public:
-  explicit ModuleToFunctionConverter(TaichiLLVMContext *tlctx,
-                                     LlvmRuntimeExecutor *program);
-
-  virtual ~ModuleToFunctionConverter() = default;
-
-  virtual FunctionType convert(const std::string &kernel_name,
-                               const std::vector<LlvmLaunchArgInfo> &args,
-                               LLVMCompiledKernel data) const = 0;
-
-  virtual FunctionType convert(const Kernel *kernel,
-                               LLVMCompiledKernel data) const;
+      IRNode *block = nullptr) {
+    TI_NOT_IMPLEMENTED
+  }
 
  protected:
-  TaichiLLVMContext *tlctx_{nullptr};
-  LlvmRuntimeExecutor *executor_{nullptr};
+  virtual void optimize_module(llvm::Module *module) {
+  }
+#endif
+
+  const CompileConfig &get_compile_config() const {
+    return compile_config_;
+  }
+
+  TaichiLLVMContext &get_taichi_llvm_context() {
+    return tlctx_;
+  }
+
+ private:
+  const CompileConfig &compile_config_;
+  TaichiLLVMContext &tlctx_;
 };
 
-#endif
 }  // namespace taichi::lang

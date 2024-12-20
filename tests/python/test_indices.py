@@ -1,3 +1,4 @@
+import pytest
 from taichi.lang.misc import get_host_arch_list
 
 import taichi as ti
@@ -51,4 +52,35 @@ def test_indices_i64():
 
     prefix_sum()
     for i in range(n):
-        assert (val[i] == i + 1)
+        assert val[i] == i + 1
+
+
+@test_utils.test()
+def test_indices_with_matrix():
+    grid_m = ti.field(dtype=ti.i32, shape=(10, 10))
+
+    @ti.kernel
+    def build_grid():
+        base = int(ti.Vector([2, 4]))
+        grid_m[base] = 100
+
+        grid_m[int(ti.Vector([1, 1]))] = 10
+
+    build_grid()
+
+    assert grid_m[1, 1] == 10
+    assert grid_m[2, 4] == 100
+
+
+@test_utils.test()
+def test_negative_valued_indices():
+    @ti.kernel
+    def foo(i: int):
+        x = ti.Vector([i, i + 1, i + 2])
+        print(x[:-1])
+
+    with pytest.raises(
+        ti.TaichiSyntaxError,
+        match="Negative indices are not supported in Taichi kernels.",
+    ):
+        foo(0)

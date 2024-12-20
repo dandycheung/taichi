@@ -1,9 +1,9 @@
 #include "taichi/runtime/llvm/llvm_aot_module_builder.h"
 
 #include <algorithm>
-#include "taichi/runtime/llvm/launch_arg_info.h"
 #include "taichi/runtime/program_impls/llvm/llvm_program.h"
 #include "taichi/runtime/llvm/aot_graph_data.h"
+#include "taichi/codegen/llvm/compiled_kernel_data.h"
 
 namespace taichi::lang {
 
@@ -22,7 +22,14 @@ void LlvmAotModuleBuilder::add_per_backend(const std::string &identifier,
   LlvmOfflineCache::KernelCacheData kcache;
   kcache.kernel_key = identifier;
   kcache.compiled_data = std::move(compiled);
-  kcache.args = infer_launch_args(kernel);
+  kcache.args.reserve(kernel->nested_parameters.size());
+  for (const auto &p : kernel->nested_parameters)
+    kcache.args.push_back(p);
+  kcache.args_type = kernel->args_type;
+  kcache.args_size = kernel->args_size;
+  kcache.rets = kernel->rets;
+  kcache.ret_size = kernel->ret_size;
+  kcache.ret_type = kernel->ret_type;
   kcache.last_used_at = std::time(nullptr);
   kcache.created_at = std::time(nullptr);
   cache_.kernels[identifier] = std::move(kcache);
@@ -60,18 +67,13 @@ void LlvmAotModuleBuilder::add_field_per_backend(const std::string &identifier,
   cache_.fields[snode_tree_id] = std::move(field_cache);
 }
 
-void LlvmAotModuleBuilder::add_compiled_kernel(const std::string &identifier,
-                                               aot::Kernel *kernel) {
-  auto *kernel_impl = dynamic_cast<llvm_aot::KernelImpl *>(kernel);
-  TI_ASSERT(kernel_impl);
-  if (!kernel_impl->kernel_data_.created_at) {
-    kernel_impl->kernel_data_.last_used_at = std::time(nullptr);
-    kernel_impl->kernel_data_.created_at = std::time(nullptr);
-  }
-  const std::string &kernel_name = identifier;
-  if (cache_.kernels.find(kernel_name) == cache_.kernels.end()) {
-    cache_.kernels[kernel_name] = std::move(kernel_impl->kernel_data_);
-  }
+LLVMCompiledKernel LlvmAotModuleBuilder::compile_kernel(Kernel *kernel) {
+  const auto &ckd =
+      compilation_manager_.load_or_compile(compile_config_, {}, *kernel);
+  TI_ASSERT(arch_uses_llvm(ckd.arch()));
+  return dynamic_cast<const LLVM::CompiledKernelData &>(ckd)
+      .get_internal_data()
+      .compiled_data.clone();
 }
 
 }  // namespace taichi::lang

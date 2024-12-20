@@ -179,6 +179,14 @@ const tinyir::Type *translate_ti_primitive(tinyir::Block &ir_module,
     } else if (t == PrimitiveType::i64) {
       return ir_module.emplace_back<IntType>(/*num_bits=*/64,
                                              /*is_signed=*/true);
+    } else if (t == PrimitiveType::u1) {
+      // Spir-v has no full support for boolean types, using boolean types in
+      // backend may cause issues. These issues arise when we use boolean as
+      // return type, argument type and inner dtype of compount types. Since
+      // boolean types has the same width with int32 in GLSL, we use int32
+      // instead.
+      return ir_module.emplace_back<IntType>(/*num_bits=*/32,
+                                             /*is_signed=*/true);
     } else if (t == PrimitiveType::u8) {
       return ir_module.emplace_back<IntType>(/*num_bits=*/8,
                                              /*is_signed=*/false);
@@ -290,7 +298,7 @@ class TypeReducer : public TypeVisitor {
   std::unique_ptr<tinyir::Block> copy{nullptr};
   std::unordered_map<const tinyir::Type *, const tinyir::Type *> &oldptr2newptr;
 
-  TypeReducer(
+  explicit TypeReducer(
       std::unordered_map<const tinyir::Type *, const tinyir::Type *> &old2new)
       : oldptr2newptr(old2new) {
     copy = std::make_unique<tinyir::Block>();
@@ -395,7 +403,9 @@ class Translate2Spirv : public TypeVisitor {
         vt = spir_builder_->i64_type();
       }
     } else {
-      if (type->num_bits() == 8) {
+      if (type->num_bits() == 1) {
+        vt = spir_builder_->bool_type();
+      } else if (type->num_bits() == 8) {
         vt = spir_builder_->u8_type();
       } else if (type->num_bits() == 16) {
         vt = spir_builder_->u16_type();
@@ -453,9 +463,10 @@ class Translate2Spirv : public TypeVisitor {
 
   void visit_array_type(const ArrayType *type) override {
     SType vt = spir_builder_->get_null_type();
-    spir_builder_->declare_global(spv::OpTypeArray, vt,
-                                  ir_node_2_spv_value[type->element_type()],
-                                  type->get_constant_shape()[0]);
+    spir_builder_->declare_global(
+        spv::OpTypeArray, vt, ir_node_2_spv_value[type->element_type()],
+        spir_builder_->int_immediate_number(spir_builder_->i32_type(),
+                                            type->get_constant_shape()[0]));
     ir_node_2_spv_value[type] = vt.id;
     spir_builder_->decorate(spv::OpDecorate, vt, spv::DecorationArrayStride,
                             type->memory_alignment_size(layout_context_));
@@ -469,6 +480,37 @@ std::unordered_map<const tinyir::Node *, uint32_t> ir_translate_to_spirv(
   Translate2Spirv translator(spir_builder, layout_ctx);
   translator.visit(blk);
   return std::move(translator.ir_node_2_spv_value);
+}
+const tinyir::Type *translate_ti_type(tinyir::Block &ir_module,
+                                      const DataType t,
+                                      bool has_buffer_ptr) {
+  if (t->is<PrimitiveType>()) {
+    return translate_ti_primitive(ir_module, t);
+  }
+  if (t->is<PointerType>()) {
+    if (has_buffer_ptr) {
+      return ir_module.emplace_back<IntType>(/*num_bits=*/64,
+                                             /*is_signed=*/false);
+    } else {
+      return ir_module.emplace_back<IntType>(/*num_bits=*/32,
+                                             /*is_signed=*/false);
+    }
+  }
+  if (t->is<TensorType>()) {
+    return ir_module.emplace_back<ArrayType>(
+        translate_ti_primitive(ir_module, t.get_element_type()),
+        t->as<TensorType>()->get_num_elements());
+  }
+  if (auto struct_type = t->cast<lang::StructType>()) {
+    std::vector<const tinyir::Type *> element_types;
+    auto &elements = struct_type->elements();
+    for (auto &element : elements) {
+      element_types.push_back(
+          translate_ti_type(ir_module, element.type, has_buffer_ptr));
+    }
+    return ir_module.emplace_back<StructType>(element_types);
+  }
+  TI_NOT_IMPLEMENTED
 }
 
 }  // namespace spirv

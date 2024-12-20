@@ -4,25 +4,25 @@ sidebar_position: 2
 
 # Sparse Matrix
 
-Sparse matrices are frequently used when solving linear systems in science and engineering. Taichi provides programmers with useful APIs for sparse matrices.
+Sparse matrices are frequently involved in solving linear systems in science and engineering. Taichi provides useful APIs for sparse matrices on the CPU and CUDA backends.
 
-To use the sparse matrix in taichi programs, you should follow these three steps:
+To use sparse matrices in Taichi programs, follow these three steps:
 
 1. Create a `builder` using `ti.linalg.SparseMatrixBuilder()`.
-2. Fill the `builder` with your matrices' data.
-3. Create sparse matrices from the `builder`.
+2. Call `ti.kernel` to fill the `builder` with your matrices' data.
+3. Build sparse matrices from the `builder`.
 
 :::caution WARNING
-The sparse matrix is still under implementation. There are some limitations:
+The sparse matrix feature is still under development. There are some limitations:
+- The sparse matrix data type on the CPU backend only supports `f32` and `f64`.
+- The sparse matrix data type on the CUDA backend only supports `f32`.
 
-- Only the CPU backend is supported.
-- The data type of sparse matrix is float32.
-- The storage format is column-major
 :::
 Here's an example:
 ```python
 import taichi as ti
-ti.init(arch=ti.x64) # only CPU backend is supported for now
+arch = ti.cpu # or ti.cuda
+ti.init(arch=arch)
 
 n = 4
 # step 1: create sparse matrix builder
@@ -56,7 +56,7 @@ print(A)
 
 The basic operations like `+`, `-`, `*`, `@` and transpose of sparse matrices are supported now.
 
-```python
+```python cont
 print(">>>> Summation: C = A + A")
 C = A + A
 print(C)
@@ -131,65 +131,3 @@ print(f">>>> Element Access: A[0,0] = {A[0,0]}")
 # outputs:
 # >>>> Element Access: A[0,0] = 1.0
 ```
-
-## Sparse linear solver
-You may want to solve some linear equations using sparse matrices.
-Then, the following steps could help:
-1. Create a `solver` using `ti.linalg.SparseSolver(solver_type, ordering)`. Currently, the sparse solver supports `LLT`, `LDLT` and `LU` factorization types, and orderings including `AMD`, `COLAMD`.
-2. Analyze and factorize the sparse matrix you want to solve using `solver.analyze_pattern(sparse_matrix)` and `solver.factorize(sparse_matrix)`
-3. Call `solver.solve(b)` to get your solutions, where `b` is a numpy array or taichi filed representing the right-hand side of the linear system.
-4. Call `solver.info()` to check if the solving process succeeds.
-
-Here's a full example.
-
-```python
-import taichi as ti
-
-ti.init(arch=ti.x64)
-
-n = 4
-
-K = ti.linalg.SparseMatrixBuilder(n, n, max_num_triplets=100)
-b = ti.field(ti.f32, shape=n)
-
-@ti.kernel
-def fill(A: ti.types.sparse_matrix_builder(), b: ti.template(), interval: ti.i32):
-    for i in range(n):
-        A[i, i] += 2.0
-
-        if i % interval == 0:
-            b[i] += 1.0
-
-fill(K, b, 3)
-
-A = K.build()
-print(">>>> Matrix A:")
-print(A)
-print(">>>> Vector b:")
-print(b)
-# outputs:
-# >>>> Matrix A:
-# [2, 0, 0, 0]
-# [0, 2, 0, 0]
-# [0, 0, 2, 0]
-# [0, 0, 0, 2]
-# >>>> Vector b:
-# [1. 0. 0. 1.]
-solver = ti.linalg.SparseSolver(solver_type="LLT")
-solver.analyze_pattern(A)
-solver.factorize(A)
-x = solver.solve(b)
-isSuccess = solver.info()
-print(">>>> Solve sparse linear systems Ax = b with the solution x:")
-print(x)
-print(f">>>> Computation was successful?: {isSuccess}")
-# outputs:
-# >>>> Solve sparse linear systems Ax = b with the solution x:
-# [0.5 0.  0.  0.5]
-# >>>> Computation was successful?: True
-```
-## Examples
-
-Please have a look at our two demos for more information:
-+ [Stable fluid](https://github.com/taichi-dev/taichi/blob/master/python/taichi/examples/simulation/stable_fluid.py): A 2D fluid simulation using a sparse Laplacian matrix to solve Poisson's pressure equation.
-+ [Implicit mass spring](https://github.com/taichi-dev/taichi/blob/master/python/taichi/examples/simulation/implicit_mass_spring.py): A 2D cloth simulation demo using sparse matrices to solve the linear systems.

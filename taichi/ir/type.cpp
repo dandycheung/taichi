@@ -34,6 +34,13 @@ DataType PrimitiveType::get(PrimitiveTypeID t) {
 std::size_t DataType::hash() const {
   if (auto primitive = ptr_->cast<PrimitiveType>()) {
     return (std::size_t)primitive->type;
+  } else if (auto tensor_type = ptr_->cast<TensorType>()) {
+    std::size_t ret = 0;
+    auto tensor_shape = tensor_type->get_shape();
+    for (int i = 0; i < tensor_shape.size(); i++) {
+      ret += (i + 1) * 107 + tensor_shape[i];
+    }
+    return ret + DataType(tensor_type->get_element_type()).hash();
   } else if (auto pointer = ptr_->cast<PointerType>()) {
     return 10007 + DataType(pointer->get_pointee_type()).hash();
   } else {
@@ -84,6 +91,10 @@ std::string PrimitiveType::to_string() const {
   return data_type_name(DataType(const_cast<PrimitiveType *>(this)));
 }
 
+const Type *PrimitiveType::get_type() const {
+  return TypeFactory::get_instance().get_primitive_type(type);
+}
+
 std::string PointerType::to_string() const {
   if (is_bit_pointer_) {
     // "^" for bit-level pointers
@@ -94,6 +105,11 @@ std::string PointerType::to_string() const {
   }
 }
 
+const Type *PointerType::get_type() const {
+  return TypeFactory::get_instance().get_pointer_type(pointee_,
+                                                      is_bit_pointer_);
+}
+
 std::string TensorType::to_string() const {
   std::string s = "[Tensor (";
   for (int i = 0; i < (int)shape_.size(); ++i) {
@@ -101,6 +117,104 @@ std::string TensorType::to_string() const {
   }
   s += fmt::format(") {}]", element_->to_string());
   return s;
+}
+
+size_t TensorType::get_element_offset(int ind) const {
+  return data_type_size(element_) * ind;
+}
+
+const Type *TensorType::get_type() const {
+  return TypeFactory::get_instance().get_tensor_type(shape_, element_);
+}
+
+const Type *AbstractDictionaryType::get_element_type(
+    const std::vector<int> &indices) const {
+  const Type *type_now = this;
+  for (auto ind : indices) {
+    if (auto tensor_type = type_now->cast<TensorType>()) {
+      TI_ASSERT(ind < tensor_type->get_num_elements())
+      type_now = tensor_type->get_element_type();
+    } else if (auto struct_type = type_now->cast<StructType>()) {
+      type_now = struct_type->elements_[ind].type;
+    } else if (auto argpack_type = type_now->cast<ArgPackType>()) {
+      type_now = argpack_type->elements_[ind].type;
+    } else {
+      TI_NOT_IMPLEMENTED;
+    }
+  }
+  return type_now;
+}
+
+std::string StructType::to_string() const {
+  std::string s = fmt::format("struct[{}]{{", layout_);
+  for (int i = 0; i < elements_.size(); i++) {
+    if (i) {
+      s += ", ";
+    }
+    s += fmt::format("{}({}, at {}B): {}", i, elements_[i].name,
+                     elements_[i].offset, elements_[i].type->to_string());
+  }
+  s += "}";
+  return s;
+}
+
+size_t StructType::get_element_offset(const std::vector<int> &indices) const {
+  const Type *type_now = this;
+  size_t offset = 0;
+  for (auto ind : indices) {
+    if (auto tensor_type = type_now->cast<TensorType>()) {
+      TI_ASSERT(ind < tensor_type->get_num_elements())
+      offset += tensor_type->get_element_offset(ind);
+      type_now = tensor_type->get_element_type();
+    } else {
+      offset += type_now->as<StructType>()->elements_[ind].offset;
+      type_now = type_now->as<StructType>()->elements_[ind].type;
+    }
+  }
+  return offset;
+}
+
+const Type *StructType::get_type() const {
+  return TypeFactory::get_instance().get_struct_type(elements_, layout_);
+}
+
+std::string ArgPackType::to_string() const {
+  std::string s = fmt::format("argpack[{}]{{", layout_);
+  for (int i = 0; i < elements_.size(); i++) {
+    if (i) {
+      s += ", ";
+    }
+    s += fmt::format("{}({}, #{}): {}", i, elements_[i].name, i + 1,
+                     elements_[i].type->to_string());
+  }
+  s += "}";
+  return s;
+}
+
+const Type *ArgPackType::get_type() const {
+  return TypeFactory::get_instance().get_argpack_type(elements_, layout_);
+}
+
+size_t ArgPackType::get_element_offset(const std::vector<int> &indices) const {
+  const Type *type_now = this;
+  size_t offset = 0;
+  for (auto it = indices.begin(); it != indices.end(); ++it) {
+    int ind = *it;
+    if (auto tensor_type = type_now->cast<TensorType>()) {
+      TI_ASSERT(ind < tensor_type->get_num_elements())
+      offset += tensor_type->get_element_offset(ind);
+      type_now = tensor_type->get_element_type();
+    } else if (auto struct_type = type_now->cast<StructType>()) {
+      std::vector<int> indices_for_struct;
+      indices_for_struct.assign(it, indices.end());
+      offset += struct_type->get_element_offset(indices_for_struct);
+      return offset;
+    } else {
+      offset += type_now->as<ArgPackType>()->elements_[ind].offset;
+      type_now = type_now->as<ArgPackType>()->elements_[ind].type;
+    }
+  }
+  return offset;
 }
 
 bool Type::is_primitive(PrimitiveTypeID type) const {
@@ -116,7 +230,10 @@ std::string QuantIntType::to_string() const {
 }
 
 QuantIntType::QuantIntType(int num_bits, bool is_signed, Type *compute_type)
-    : compute_type_(compute_type), num_bits_(num_bits), is_signed_(is_signed) {
+    : Type(TypeKind::QuantInt),
+      compute_type_(compute_type),
+      num_bits_(num_bits),
+      is_signed_(is_signed) {
   if (compute_type == nullptr) {
     auto type_id = is_signed ? PrimitiveTypeID::i32 : PrimitiveTypeID::u32;
     this->compute_type_ =
@@ -124,10 +241,18 @@ QuantIntType::QuantIntType(int num_bits, bool is_signed, Type *compute_type)
   }
 }
 
+const Type *QuantIntType::get_type() const {
+  return TypeFactory::get_instance().get_quant_int_type(num_bits_, is_signed_,
+                                                        compute_type_);
+}
+
 QuantFixedType::QuantFixedType(Type *digits_type,
                                Type *compute_type,
                                float64 scale)
-    : digits_type_(digits_type), compute_type_(compute_type), scale_(scale) {
+    : Type(TypeKind::QuantFixed),
+      digits_type_(digits_type),
+      compute_type_(compute_type),
+      scale_(scale) {
   TI_ASSERT(digits_type->is<QuantIntType>());
   TI_ASSERT(compute_type->is<PrimitiveType>());
   TI_ASSERT(is_real(compute_type));
@@ -142,10 +267,16 @@ bool QuantFixedType::get_is_signed() const {
   return digits_type_->as<QuantIntType>()->get_is_signed();
 }
 
+const Type *QuantFixedType::get_type() const {
+  return TypeFactory::get_instance().get_quant_fixed_type(
+      digits_type_, compute_type_, scale_);
+}
+
 QuantFloatType::QuantFloatType(Type *digits_type,
                                Type *exponent_type,
                                Type *compute_type)
-    : digits_type_(digits_type),
+    : Type(TypeKind::QuantFloat),
+      digits_type_(digits_type),
       exponent_type_(exponent_type),
       compute_type_(compute_type) {
   TI_ASSERT(digits_type->is<QuantIntType>());
@@ -156,6 +287,11 @@ QuantFloatType::QuantFloatType(Type *digits_type,
   TI_ASSERT(exponent_type->as<QuantIntType>()->get_num_bits() <= 8);
   TI_ASSERT(exponent_type->as<QuantIntType>()->get_is_signed() == false);
   TI_ASSERT(get_digit_bits() <= 23);
+}
+
+const Type *QuantFloatType::get_type() const {
+  return TypeFactory::get_instance().get_quant_float_type(
+      digits_type_, exponent_type_, compute_type_);
 }
 
 std::string QuantFloatType::to_string() const {
@@ -184,7 +320,8 @@ BitStructType::BitStructType(
     const std::vector<int> &member_bit_offsets,
     const std::vector<int> &member_exponents,
     const std::vector<std::vector<int>> &member_exponent_users)
-    : physical_type_(physical_type),
+    : Type(TypeKind::BitStruct),
+      physical_type_(physical_type),
       member_types_(member_types),
       member_bit_offsets_(member_bit_offsets),
       member_exponents_(member_exponents),
@@ -240,8 +377,19 @@ std::string BitStructType::to_string() const {
   return str + ")";
 }
 
+const Type *BitStructType::get_type() const {
+  return TypeFactory::get_instance().get_bit_struct_type(
+      physical_type_, member_types_, member_bit_offsets_, member_exponents_,
+      member_exponent_users_);
+}
+
 std::string QuantArrayType::to_string() const {
   return fmt::format("qa({}x{})", element_type_->to_string(), num_elements_);
+}
+
+const Type *QuantArrayType::get_type() const {
+  return TypeFactory::get_instance().get_quant_array_type(
+      physical_type_, element_type_, num_elements_);
 }
 
 std::string TypedConstant::stringify() const {
@@ -255,10 +403,14 @@ std::string TypedConstant::stringify() const {
     return fmt::format("{}", val_i64);
   } else if (dt->is_primitive(PrimitiveTypeID::f64)) {
     return fmt::format("{}", val_f64);
+  } else if (dt->is_primitive(PrimitiveTypeID::f16)) {
+    return fmt::format("{}", val_f32);
   } else if (dt->is_primitive(PrimitiveTypeID::i8)) {
     return fmt::format("{}", val_i8);
   } else if (dt->is_primitive(PrimitiveTypeID::i16)) {
     return fmt::format("{}", val_i16);
+  } else if (dt->is_primitive(PrimitiveTypeID::u1)) {
+    return fmt::format("{}", val_u1);
   } else if (dt->is_primitive(PrimitiveTypeID::u8)) {
     return fmt::format("{}", val_u8);
   } else if (dt->is_primitive(PrimitiveTypeID::u16)) {
@@ -285,10 +437,14 @@ bool TypedConstant::equal_type_and_value(const TypedConstant &o) const {
     return val_i64 == o.val_i64;
   } else if (dt->is_primitive(PrimitiveTypeID::f64)) {
     return val_f64 == o.val_f64;
+  } else if (dt->is_primitive(PrimitiveTypeID::f16)) {
+    return val_f32 == o.val_f32;
   } else if (dt->is_primitive(PrimitiveTypeID::i8)) {
     return val_i8 == o.val_i8;
   } else if (dt->is_primitive(PrimitiveTypeID::i16)) {
     return val_i16 == o.val_i16;
+  } else if (dt->is_primitive(PrimitiveTypeID::u1)) {
+    return val_u1 == o.val_u1;
   } else if (dt->is_primitive(PrimitiveTypeID::u8)) {
     return val_u8 == o.val_u8;
   } else if (dt->is_primitive(PrimitiveTypeID::u16)) {
@@ -313,6 +469,11 @@ float32 &TypedConstant::val_float32() {
   return val_f32;
 }
 
+float32 &TypedConstant::val_float16() {
+  TI_ASSERT(dt == PrimitiveType::f16);
+  return val_f32;
+}
+
 int64 &TypedConstant::val_int64() {
   TI_ASSERT(get_data_type<int64>() == dt);
   return val_i64;
@@ -331,6 +492,11 @@ int8 &TypedConstant::val_int8() {
 int16 &TypedConstant::val_int16() {
   TI_ASSERT(get_data_type<int16>() == dt);
   return val_i16;
+}
+
+uint1 &TypedConstant::val_uint1() {
+  TI_ASSERT(get_data_type<uint1>() == dt);
+  return val_u1;
 }
 
 uint8 &TypedConstant::val_uint8() {
@@ -376,6 +542,8 @@ uint64 TypedConstant::val_uint() const {
     return val_u64;
   } else if (dt->is_primitive(PrimitiveTypeID::u8)) {
     return val_u8;
+  } else if (dt->is_primitive(PrimitiveTypeID::u1)) {
+    return val_u1;
   } else if (dt->is_primitive(PrimitiveTypeID::u16)) {
     return val_u16;
   } else {
@@ -386,6 +554,8 @@ uint64 TypedConstant::val_uint() const {
 float64 TypedConstant::val_float() const {
   TI_ASSERT(is_real(dt));
   if (dt->is_primitive(PrimitiveTypeID::f32)) {
+    return val_f32;
+  } else if (dt->is_primitive(PrimitiveTypeID::f16)) {
     return val_f32;
   } else if (dt->is_primitive(PrimitiveTypeID::f64)) {
     return val_f64;

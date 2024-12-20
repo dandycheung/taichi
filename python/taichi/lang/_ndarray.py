@@ -2,7 +2,8 @@ import numpy as np
 from taichi._lib import core as _ti_core
 from taichi.lang import impl
 from taichi.lang.enums import Layout
-from taichi.lang.util import cook_dtype, python_scope, to_numpy_type
+from taichi.lang.exception import TaichiIndexError
+from taichi.lang.util import cook_dtype, get_traceback, python_scope, to_numpy_type
 from taichi.types import primitive_types
 from taichi.types.ndarray_type import NdarrayTypeMetadata
 from taichi.types.utils import is_real, is_signed
@@ -15,6 +16,7 @@ class Ndarray:
         dtype (DataType): Data type of each value.
         shape (Tuple[int]): Shape of the Ndarray.
     """
+
     def __init__(self):
         self.host_accessor = None
         self.shape = None
@@ -22,9 +24,10 @@ class Ndarray:
         self.dtype = None
         self.arr = None
         self.layout = Layout.AOS
+        self.grad = None
 
     def get_type(self):
-        return NdarrayTypeMetadata(self.element_type, self.shape)
+        return NdarrayTypeMetadata(self.element_type, self.shape, self.grad is not None)
 
     @property
     def element_shape(self):
@@ -64,8 +67,9 @@ class Ndarray:
         Args:
             val (Union[int, float]): Value to fill.
         """
-        if impl.current_cfg().arch != _ti_core.Arch.cuda and impl.current_cfg(
-        ).arch != _ti_core.Arch.x64:
+        if impl.current_cfg().arch != _ti_core.Arch.cuda and impl.current_cfg().arch != _ti_core.Arch.x64:
+            self._fill_by_kernel(val)
+        elif _ti_core.is_tensor(self.element_type):
             self._fill_by_kernel(val)
         elif self.dtype == primitive_types.f32:
             impl.get_runtime().prog.fill_float(self.arr, val)
@@ -83,9 +87,9 @@ class Ndarray:
         Returns:
             numpy.ndarray: The result numpy array.
         """
-        arr = np.zeros(shape=self.arr.total_shape(),
-                       dtype=to_numpy_type(self.dtype))
+        arr = np.zeros(shape=self.arr.total_shape(), dtype=to_numpy_type(self.dtype))
         from taichi._kernels import ndarray_to_ext_arr  # pylint: disable=C0415
+
         ndarray_to_ext_arr(self, arr)
         impl.get_runtime().sync()
         return arr
@@ -97,10 +101,9 @@ class Ndarray:
         Returns:
             numpy.ndarray: The result numpy array.
         """
-        arr = np.zeros(shape=self.arr.total_shape(),
-                       dtype=to_numpy_type(self.dtype))
-        from taichi._kernels import \
-            ndarray_matrix_to_ext_arr  # pylint: disable=C0415
+        arr = np.zeros(shape=self.arr.total_shape(), dtype=to_numpy_type(self.dtype))
+        from taichi._kernels import ndarray_matrix_to_ext_arr  # pylint: disable=C0415
+
         layout_is_aos = 1
         ndarray_matrix_to_ext_arr(self, arr, layout_is_aos, as_vector)
         impl.get_runtime().sync()
@@ -116,13 +119,12 @@ class Ndarray:
         if not isinstance(arr, np.ndarray):
             raise TypeError(f"{np.ndarray} expected, but {type(arr)} provided")
         if tuple(self.arr.total_shape()) != tuple(arr.shape):
-            raise ValueError(
-                f"Mismatch shape: {tuple(self.arr.shape)} expected, but {tuple(arr.shape)} provided"
-            )
-        if hasattr(arr, 'contiguous'):
-            arr = arr.contiguous()
+            raise ValueError(f"Mismatch shape: {tuple(self.arr.shape)} expected, but {tuple(arr.shape)} provided")
+        if not arr.flags.c_contiguous:
+            arr = np.ascontiguousarray(arr)
 
         from taichi._kernels import ext_arr_to_ndarray  # pylint: disable=C0415
+
         ext_arr_to_ndarray(arr, self)
         impl.get_runtime().sync()
 
@@ -137,13 +139,13 @@ class Ndarray:
             raise TypeError(f"{np.ndarray} expected, but {type(arr)} provided")
         if tuple(self.arr.total_shape()) != tuple(arr.shape):
             raise ValueError(
-                f"Mismatch shape: {tuple(self.arr.shape)} expected, but {tuple(arr.shape)} provided"
+                f"Mismatch shape: {tuple(self.arr.total_shape())} expected, but {tuple(arr.shape)} provided"
             )
-        if hasattr(arr, 'contiguous'):
-            arr = arr.contiguous()
+        if not arr.flags.c_contiguous:
+            arr = np.ascontiguousarray(arr)
 
-        from taichi._kernels import \
-            ext_arr_to_ndarray_matrix  # pylint: disable=C0415
+        from taichi._kernels import ext_arr_to_ndarray_matrix  # pylint: disable=C0415
+
         layout_is_aos = 1
         ext_arr_to_ndarray_matrix(arr, self, layout_is_aos, as_vector)
         impl.get_runtime().sync()
@@ -178,8 +180,17 @@ class Ndarray:
         assert isinstance(other, Ndarray)
         assert tuple(self.arr.shape) == tuple(other.arr.shape)
         from taichi._kernels import ndarray_to_ndarray  # pylint: disable=C0415
+
         ndarray_to_ndarray(self, other)
         impl.get_runtime().sync()
+
+    def _set_grad(self, grad):
+        """Sets the gradient ndarray.
+
+        Args:
+            grad (Ndarray): The gradient ndarray.
+        """
+        self.grad = grad
 
     def __deepcopy__(self, memo=None):
         """Copies all elements to a new ndarray.
@@ -202,8 +213,9 @@ class Ndarray:
         if key is None:
             key = ()
         if not isinstance(key, (tuple, list)):
-            key = (key, )
-        assert len(key) == len(self.arr.total_shape())
+            key = (key,)
+        if len(key) != len(self.arr.total_shape()):
+            raise TaichiIndexError(f"{len(self.arr.total_shape())}d ndarray indexed with {len(key)}d indices: {key}")
         return key
 
     @python_scope
@@ -221,13 +233,19 @@ class ScalarNdarray(Ndarray):
         dtype (DataType): Data type of each value.
         shape (Tuple[int]): Shape of the ndarray.
     """
+
     def __init__(self, dtype, arr_shape):
         super().__init__()
         self.dtype = cook_dtype(dtype)
         self.arr = impl.get_runtime().prog.create_ndarray(
-            self.dtype, arr_shape)
+            self.dtype, arr_shape, layout=Layout.NULL, zero_fill=True, dbg_info=_ti_core.DebugInfo(get_traceback())
+        )
         self.shape = tuple(self.arr.shape)
         self.element_type = dtype
+
+    def __del__(self):
+        if impl is not None and impl.get_runtime() is not None and impl.get_runtime().prog is not None:
+            impl.get_runtime().prog.delete_ndarray(self.arr)
 
     @property
     def element_shape(self):
@@ -258,10 +276,11 @@ class ScalarNdarray(Ndarray):
 
     def _fill_by_kernel(self, val):
         from taichi._kernels import fill_ndarray  # pylint: disable=C0415
+
         fill_ndarray(self, val)
 
     def __repr__(self):
-        return '<ti.ndarray>'
+        return "<ti.ndarray>"
 
 
 class NdarrayHostAccessor:
@@ -274,11 +293,13 @@ class NdarrayHostAccessor:
 
             def setter(value, *key):
                 ndarray.write_float(key, value)
+
         else:
             if is_signed(dtype):
 
                 def getter(*key):
                     return ndarray.read_int(key)
+
             else:
 
                 def getter(*key):
@@ -298,6 +319,7 @@ class NdarrayHostAccess:
         indices_first (Tuple[Int]): Indices of first-level access (coordinates in the field).
         indices_second (Tuple[Int]): Indices of second-level access (indices in the vector/matrix).
     """
+
     def __init__(self, arr, indices_first, indices_second):
         self.ndarr = arr
         self.arr = arr.arr
@@ -305,13 +327,11 @@ class NdarrayHostAccess:
 
         def getter():
             self.ndarr._initialize_host_accessor()
-            return self.ndarr.host_accessor.getter(
-                *self.ndarr._pad_key(self.indices))
+            return self.ndarr.host_accessor.getter(*self.ndarr._pad_key(self.indices))
 
         def setter(value):
             self.ndarr._initialize_host_accessor()
-            self.ndarr.host_accessor.setter(value,
-                                            *self.ndarr._pad_key(self.indices))
+            self.ndarr.host_accessor.setter(value, *self.ndarr._pad_key(self.indices))
 
         self.getter = getter
         self.setter = setter

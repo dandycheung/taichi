@@ -10,6 +10,7 @@
 
 #include "taichi/common/core.h"
 #include "taichi/common/exceptions.h"
+#include "taichi/common/one_or_more.h"
 #include "taichi/ir/snode.h"
 #include "taichi/ir/mesh.h"
 #include "taichi/ir/type_factory.h"
@@ -30,6 +31,7 @@ using pStmt = std::unique_ptr<Stmt>;
 class SNode;
 
 class Kernel;
+class Callable;
 struct CompileConfig;
 
 enum class SNodeAccessFlag : int { block_local, read_only, mesh_local };
@@ -83,7 +85,8 @@ class Identifier {
   // Identifier() = default;
 
   // Multiple identifiers can share the same name but must have different id's
-  Identifier(int id, const std::string &name = "") : name_(name), id(id) {
+  explicit Identifier(int id, const std::string &name = "")
+      : name_(name), id(id) {
   }
 
   std::string raw_name() const;
@@ -103,8 +106,10 @@ class Identifier {
 
 #ifdef TI_WITH_LLVM
 using stmt_vector = llvm::SmallVector<pStmt, 8>;
+using stmt_ref_vector = llvm::SmallVector<Stmt *, 2>;
 #else
 using stmt_vector = std::vector<pStmt>;
+using stmt_ref_vector = std::vector<Stmt *>;
 #endif
 
 class VecStatement {
@@ -114,6 +119,7 @@ class VecStatement {
   VecStatement() {
   }
 
+  // NOLINTNEXTLINE(google-explicit-constructor)
   VecStatement(pStmt &&stmt) {
     push_back(std::move(stmt));
   }
@@ -122,6 +128,7 @@ class VecStatement {
     stmts = std::move(o.stmts);
   }
 
+  // NOLINTNEXTLINE(google-explicit-constructor)
   VecStatement(stmt_vector &&other_stmts) {
     stmts = std::move(other_stmts);
   }
@@ -190,10 +197,35 @@ class IRVisitor {
 struct CompileConfig;
 class Kernel;
 
+using stmt_refs = one_or_more<Stmt *>;
+
+namespace ir_traits {
+
+// FIXME: Use C++ 20 concepts to replace `dynamic_cast<T>() != nullptr`
+
+class Store {
+ public:
+  virtual ~Store() = default;
+
+  // Get the list of sinks/destinations of the store operation
+  virtual stmt_refs get_store_destination() const = 0;
+
+  // If store_stmt provides one data source, return the data.
+  virtual Stmt *get_store_data() const = 0;
+};
+
+class Load {
+ public:
+  virtual ~Load() = default;
+
+  // If load_stmt loads some variables or a stack, return the pointers of them.
+  virtual stmt_refs get_load_pointers() const = 0;
+};
+
+}  // namespace ir_traits
+
 class IRNode {
  public:
-  Kernel *kernel;
-
   virtual void accept(IRVisitor *visitor) {
     TI_NOT_IMPLEMENTED
   }
@@ -203,11 +235,9 @@ class IRNode {
   virtual IRNode *get_parent() const = 0;
 
   IRNode *get_ir_root();
-  Kernel *get_kernel() const;
+  const IRNode *get_ir_root() const;
 
   virtual ~IRNode() = default;
-
-  CompileConfig &get_config() const;
 
   template <typename T>
   bool is() const {
@@ -239,10 +269,8 @@ class IRNode {
   std::unique_ptr<IRNode> clone();
 };
 
-#define TI_DEFINE_ACCEPT                     \
-  void accept(IRVisitor *visitor) override { \
-    visitor->visit(this);                    \
-  }
+#define TI_DEFINE_ACCEPT \
+  void accept(IRVisitor *visitor) override { visitor->visit(this); }
 
 #define TI_DEFINE_CLONE                                             \
   std::unique_ptr<Stmt> clone() const override {                    \
@@ -331,7 +359,7 @@ class StmtFieldManager {
  public:
   std::vector<std::unique_ptr<StmtField>> fields;
 
-  StmtFieldManager(Stmt *stmt) : stmt_(stmt) {
+  explicit StmtFieldManager(Stmt *stmt) : stmt_(stmt) {
   }
 
   template <typename T>
@@ -351,7 +379,11 @@ class StmtFieldManager {
   bool equal(StmtFieldManager &other) const;
 };
 
-#define TI_STMT_DEF_FIELDS(...) TI_IO_DEF(__VA_ARGS__)
+#define TI_STMT_DEF_FIELDS(...)  \
+  template <typename S>          \
+  void io(S &serializer) const { \
+    TI_IO(__VA_ARGS__);          \
+  }
 #define TI_STMT_REG_FIELDS  \
   mark_fields_registered(); \
   io(field_manager)
@@ -359,6 +391,7 @@ class StmtFieldManager {
 class Stmt : public IRNode {
  protected:
   std::vector<Stmt **> operands;
+  explicit Stmt(const DebugInfo &dbg_info);
 
  public:
   StmtFieldManager field_manager;
@@ -368,8 +401,8 @@ class Stmt : public IRNode {
   Block *parent;
   bool erased;
   bool fields_registered;
-  std::string tb;
   DataType ret_type;
+  DebugInfo dbg_info;
 
   Stmt();
   Stmt(const Stmt &stmt);
@@ -409,6 +442,16 @@ class Stmt : public IRNode {
     return *operands[i];
   }
 
+  std::string get_last_tb() const;
+
+  TI_FORCE_INLINE std::string const &get_tb() const {
+    return dbg_info.tb;
+  }
+
+  TI_FORCE_INLINE void set_tb(const std::string &tb) {
+    dbg_info.tb = tb;
+  }
+
   std::vector<Stmt *> get_operands() const;
 
   void set_operand(int i, Stmt *stmt);
@@ -423,6 +466,7 @@ class Stmt : public IRNode {
   virtual void replace_operand_with(Stmt *old_stmt, Stmt *new_stmt);
 
   IRNode *get_parent() const override;
+  virtual Callable *get_callable() const;
 
   // returns the inserted stmt
   Stmt *insert_before_me(std::unique_ptr<Stmt> &&new_stmt);
@@ -452,10 +496,6 @@ class Stmt : public IRNode {
     return make_typed<T>(std::forward<Args>(args)...);
   }
 
-  void set_tb(const std::string &tb) {
-    this->tb = tb;
-  }
-
   std::string type();
 
   virtual std::unique_ptr<Stmt> clone() const {
@@ -471,7 +511,7 @@ class Stmt : public IRNode {
 
 class Block : public IRNode {
  public:
-  Stmt *parent_stmt{nullptr};
+  std::variant<Stmt *, Callable *> parent_;
   stmt_vector statements;
   stmt_vector trash_bin;
   std::vector<SNode *> stop_gradients;
@@ -480,10 +520,17 @@ class Block : public IRNode {
   // variables, and AllocaStmt for other variables.
   std::map<Identifier, Stmt *> local_var_to_stmt;
 
-  Block() {
-    parent_stmt = nullptr;
-    kernel = nullptr;
+  explicit Block(Callable *callable = nullptr) {
+    parent_ = callable;
   }
+
+  Stmt *parent_stmt() const;
+
+  void set_parent_callable(Callable *callable);
+
+  void set_parent_stmt(Stmt *stmt);
+
+  Callable *parent_callable() const;
 
   Block *parent_block() const;
 
@@ -570,6 +617,19 @@ class DelayedIRModifier {
 
   // Force the next call of modify_ir() to return true.
   void mark_as_modified();
+};
+
+// ImmediateIRModifier aims at replacing Stmt::replace_usages_with, which visits
+// the whole tree for a single replacement. ImmediateIRModifier is currently
+// associated with a pass, visits the whole tree once at the beginning of that
+// pass, and performs a single replacement with amortized constant time.
+class ImmediateIRModifier {
+ private:
+  std::unordered_map<Stmt *, std::vector<std::pair<Stmt *, int>>> stmt_usages_;
+
+ public:
+  explicit ImmediateIRModifier(IRNode *root);
+  void replace_usages_with(Stmt *old_stmt, Stmt *new_stmt);
 };
 
 template <typename T>

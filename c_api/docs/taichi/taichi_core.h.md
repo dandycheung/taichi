@@ -10,14 +10,15 @@ Taichi Core exposes all necessary interfaces for offloading the AOT modules to T
 
 Taichi C-API intends to support the following backends:
 
-|Backend|Offload Target|Maintenance Tier|
-|-|-|-|
-|Vulkan|GPU|Tier 1|
-|CUDA (LLVM)|GPU (NVIDIA)|Tier 1|
-|CPU (LLVM)|CPU|Tier 1|
-|OpenGL|GPU|Tier 2|
-|DirectX 11|GPU (Windows)|N/A|
-|Metal|GPU (macOS, iOS)|N/A|
+|Backend     |Offload Target   |Maintenance Tier | Stabilized? |
+|------------|-----------------|-----------------|-------------|
+|Vulkan      |GPU              |Tier 1           | Yes         |
+|Metal       |GPU (macOS, iOS) |Tier 2           | No          |
+|CUDA (LLVM) |GPU (NVIDIA)     |Tier 2           | No          |
+|CPU (LLVM)  |CPU              |Tier 2           | No          |
+|OpenGL      |GPU              |Tier 2           | No          |
+|OpenGL ES   |GPU              |Tier 2           | No          |
+|DirectX 11  |GPU (Windows)    |N/A              | No          |
 
 The backends with tier-1 support are being developed and tested more intensively. And most new features will be available on Vulkan first because it has the most outstanding cross-platform compatibility among all the tier-1 backends.
 For the backends with tier-2 support, you should expect a delay in the fixes to minor issues.
@@ -35,7 +36,8 @@ The following section provides a brief introduction to the Taichi C-API.
 You *must* create a runtime instance before working with Taichi, and *only* one runtime per thread. Currently, we do not officially claim that multiple runtime instances can coexist in a process, but please feel free to [file an issue with us](https://github.com/taichi-dev/taichi/issues) if you run into any problem with runtime instance coexistence.
 
 ```cpp
-TiRuntime runtime = ti_create_runtime(TI_ARCH_VULKAN);
+// Create a Taichi Runtime on Vulkan device at index 0.
+TiRuntime runtime = ti_create_runtime(TI_ARCH_VULKAN, 0);
 ```
 
 When your program runs to the end, ensure that:
@@ -114,9 +116,9 @@ You can load a Taichi AOT module from the filesystem.
 TiAotModule aot_module = ti_load_aot_module(runtime, "/path/to/aot/module");
 ```
 
-`/path/to/aot/module` should point to the directory that contains a `metadata.tcb`.
+`/path/to/aot/module` should point to the directory that contains a `metadata.json`.
 
-You can destroy an unused AOT module, but please ensure that there is no kernel or compute graph related to it pending to [`ti_submit`](#function-ti_submit).
+You can destroy an unused AOT module, but please ensure that there is no kernel or compute graph related to it pending to [`ti_flush`](#function-ti_flush).
 
 ```cpp
 ti_destroy_aot_module(aot_module);
@@ -177,10 +179,10 @@ named_arg2.argument = args[2];
 ti_launch_compute_graph(runtime, compute_graph, named_args.size(), named_args.data());
 ```
 
-When you have launched all kernels and compute graphs for this batch, you should `function.submit` and `function.wait` for the execution to finish.
+When you have launched all kernels and compute graphs for this batch, you should `function.flush` and `function.wait` for the execution to finish.
 
 ```cpp
-ti_submit(runtime);
+ti_flush(runtime);
 ti_wait(runtime);
 ```
 
@@ -244,9 +246,8 @@ A collection of Taichi kernels (a compute graph) to launch on the offload target
 
 `enumeration.error`
 
-Errors reported by the Taichi C-API. Enumerants greater than or equal to zero are success states.
+Errors reported by the Taichi C-API.
 
-- `enumeration.error.incomplete`: The output data is truncated because the user-provided buffer is too small.
 - `enumeration.error.success`: The Taichi C-API invocation finished gracefully.
 - `enumeration.error.not_supported`: The invoked API, or the combination of parameters is not supported by the Taichi C-API.
 - `enumeration.error.corrupted_data`: Provided data is corrupted.
@@ -257,16 +258,27 @@ Errors reported by the Taichi C-API. Enumerants greater than or equal to zero ar
 - `enumeration.error.argument_not_found`: One or more kernel arguments are missing.
 - `enumeration.error.invalid_interop`: The intended interoperation is not possible on the current arch. For example, attempts to export a Vulkan object from a CUDA runtime are not allowed.
 - `enumeration.error.invalid_state`: The Taichi C-API enters an unrecoverable invalid state. Related Taichi objects are potentially corrupted. The users *should* release the contaminated resources for stability. Please feel free to file an issue if you encountered this error in a normal routine.
+- `enumeration.error.incompatible_module`: The AOT module is not compatible with the current runtime.
 
 `enumeration.arch`
 
 Types of backend archs.
 
+- `enumeration.arch.vulkan`: Vulkan GPU backend.
+- `enumeration.arch.metal`: Metal GPU backend.
+- `enumeration.arch.cuda`: NVIDIA CUDA GPU backend.
 - `enumeration.arch.x64`: x64 native CPU backend.
 - `enumeration.arch.arm64`: Arm64 native CPU backend.
-- `enumeration.arch.cuda`: NVIDIA CUDA GPU backend.
-- `enumeration.arch.vulkan`: Vulkan GPU backend.
 - `enumeration.arch.opengl`: OpenGL GPU backend.
+- `enumeration.arch.gles`: OpenGL ES GPU backend.
+
+`enumeration.capability`
+
+Device capabilities.
+
+`structure.capability_level_info`
+
+An integral device capability level. It currently is not guaranteed that a higher level value is compatible with a lower level value.
 
 `enumeration.data_type`
 
@@ -292,6 +304,9 @@ Types of kernel and compute graph argument.
 - `enumeration.argument_type.f32`: 32-bit IEEE 754 single-precision floating-point number.
 - `enumeration.argument_type.ndarray`: ND-array wrapped around a `handle.memory`.
 - `enumeration.argument_type.texture`: Texture wrapped around a `handle.image`.
+- `enumeration.argument_type.scalar`: Typed scalar.
+- `enumeration.argument_type.tensor`: Typed tensor.
+
 
 `bit_field.memory_usage`
 
@@ -369,6 +384,10 @@ Dimensions of an image allocation.
 - `enumeration.image_layout.transfer_src`: Optimal layout as a data copy source.
 - `enumeration.image_layout.present_src`:  Optimal layout as a presentation source.
 
+`enumeration.format`
+
+Texture formats. The availability of texture formats depends on runtime support.
+
 `structure.image_offset`
 
 Offsets of an image in X, Y, Z, and array layers.
@@ -417,14 +436,48 @@ Image data bound to a sampler.
 - `structure.texture.extent`: Image extent.
 - `structure.texture.format`: Image texel format.
 
+`union.scalar_value`
+
+Scalar value represented by a power-of-two number of bits.
+
+**NOTE** The unsigned integer types merely hold the number of bits in memory and doesn't reflect any type of the underlying data. For example, a 32-bit floating-point scalar value is assigned by `*(float*)&scalar_value.x32 = 0.0f`; a 16-bit signed integer is assigned by `*(int16_t)&scalar_vaue.x16 = 1`. The actual type of the scalar is hinted via `structure.scalar.type`.
+
+- `union.scalar_value.x8`: Scalar value that fits into 8 bits.
+- `union.scalar_value.x16`: Scalar value that fits into 16 bits.
+- `union.scalar_value.x32`: Scalar value that fits into 32 bits.
+- `union.scalar_value.x64`: Scalar value that fits into 64 bits.
+
+`structure.scalar`
+
+A typed scalar value.
+
+`union.tensor_value`
+
+Tensor value represented by a power-of-two number of bits.
+
+- `union.tensor_value.x8`: Tensor value that fits into 8 bits.
+- `union.tensor_value.x16`: Tensor value that fits into 16 bits.
+- `union.tensor_value.x32`: Tensor value that fits into 32 bits.
+- `union.tensor_value.x64`: Tensor value that fits into 64 bits.
+
+`structure.tensor_value_with_length`
+
+A tensor value with a length.
+
+`structure.tensor`
+
+A typed tensor value.
+
 `union.argument_value`
 
 A scalar or structured argument value.
 
-- `union.argument_value.i32`: Value of a 32-bit one's complement signed integer.
-- `union.argument_value.f32`: Value of a 32-bit IEEE 754 single-precision floating-poing number.
+- `union.argument_value.i32`: Value of a 32-bit one's complement signed integer. This is equivalent to `union.scalar_value.x32` with `enumeration.data_type.i32`.
+- `union.argument_value.f32`: Value of a 32-bit IEEE 754 single-precision floating-poing number. This is equivalent to `union.scalar_value.x32` with `enumeration.data_type.f32`.
 - `union.argument_value.ndarray`: An ND-array to be bound.
 - `union.argument_value.texture`: A texture to be bound.
+- `union.argument_value.scalar`: An scalar to be bound.
+- `union.argument_value.tensor`: A tensor to be bound.
 
 `structure.argument`
 
@@ -440,16 +493,31 @@ A named argument value to feed compute graphs.
 - `structure.named_argument.name`: Name of the argument.
 - `structure.named_argument.argument`: Argument body.
 
+`function.get_version`
+
+Get the current taichi version. It has the same value as `TI_C_API_VERSION` as defined in `taichi_core.h`.
+
+`function.get_available_archs`
+
+Gets a list of available archs on the current platform. An arch is only available if:
+
+1. The Runtime library is compiled with its support;
+2. The current platform is installed with a capable hardware or an emulation software.
+
+An available arch has at least one device available, i.e., device index 0 is always available. If an arch is not available on the current platform, a call to `function.create_runtime` with that arch is guaranteed failing.
+
+**WARNING** Please also note that the order or returned archs is *undefined*.
+
 `function.get_last_error`
 
-Get the last error raised by Taichi C-API invocations. Returns the semantical error code.
+Gets the last error raised by Taichi C-API invocations. Returns the semantical error code.
 
 - `function.get_last_error.message_size`: Size of textual error message in `function.get_last_error.message`
 - `function.get_last_error.message`: Text buffer for the textual error message. Ignored when `message_size` is 0.
 
 `function.set_last_error`
 
-Set the provided error as the last error raised by Taichi C-API invocations. It can be useful in extended validation procedures in Taichi C-API wrappers and helper libraries.
+Sets the provided error as the last error raised by Taichi C-API invocations. It can be useful in extended validation procedures in Taichi C-API wrappers and helper libraries.
 
 - `function.set_last_error.error`: Semantical error code.
 - `function.set_last_error.message`: A null-terminated string of the textual error message or `nullptr` for empty error message.
@@ -458,9 +526,23 @@ Set the provided error as the last error raised by Taichi C-API invocations. It 
 
 Creates a Taichi Runtime with the specified `enumeration.arch`.
 
+- `function.create_runtime.arch`: Arch of Taichi Runtime.
+- `function.create_runtime.device_index`: The index of device in `function.create_runtime.arch` to create Taichi Runtime on.
+
 `function.destroy_runtime`
 
 Destroys a Taichi Runtime.
+
+`function.set_runtime_capabilities`
+
+Force override the list of available capabilities in the runtime instance.
+
+`function.get_runtime_capabilities`
+
+Gets all capabilities available on the runtime instance.
+
+- `function.get_runtime_capabilities.capability_count`: The total number of capabilities available.
+- `function.get_runtime_capabilities.capabilities`: Returned capabilities.
 
 `function.allocate_memory`
 
@@ -486,14 +568,6 @@ Allocates a device image with provided parameters.
 
 Frees an image allocation.
 
-`function.create_event`
-
-Creates an event primitive.
-
-`function.destroy_event`
-
-Destroys an event primitive.
-
 `function.copy_memory_device_to_device`
 
 Copies the data in a contiguous subsection of the device memory to another subsection. The two subsections *must not* overlap.
@@ -518,19 +592,7 @@ Launches a Taichi kernel with the provided arguments. The arguments *must* have 
 
 Launches a Taichi compute graph with provided named arguments. The named arguments *must* have the same count, names, and types as in the source code.
 
-`function.signal_event`
-
-Sets an event primitive to a signaled state so that the queues waiting for it can go on execution. If the event has been signaled, you *must* call `function.reset_event` to reset it; otherwise, an undefined behavior would occur.
-
-`function.reset_event`
-
-Sets a signaled event primitive back to an unsignaled state.
-
-`function.wait_event`
-
-Waits until an event primitive transitions to a signaled state. The awaited event *must* be signaled by an external procedure or a previous invocation to `function.reset_event`; otherwise, an undefined behavior would occur.
-
-`function.submit`
+`function.flush`
 
 Submits all previously invoked device commands to the offload device for execution.
 
@@ -542,6 +604,11 @@ Waits until all previously invoked device commands are executed. Any invoked com
 
 Loads a pre-compiled AOT module from the file system.
 Returns `definition.null_handle` if the runtime fails to load the AOT module from the specified path.
+
+`function.create_aot_module`
+
+Creates a pre-compiled AOT module from TCM data.
+Returns `definition.null_handle` if the runtime fails to create the AOT module from TCM data.
 
 `function.destroy_aot_module`
 

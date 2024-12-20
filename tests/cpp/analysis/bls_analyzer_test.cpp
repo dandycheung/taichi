@@ -20,7 +20,7 @@ class BLSAnalyzerTest : public ::testing::Test {
   void SetUp() override {
     const std::vector<Axis> axes = {Axis{0}, Axis{1}};
     root_snode_ = std::make_unique<SNode>(/*depth=*/0, /*t=*/SNodeType::root);
-    parent_snode_ = &(root_snode_->dense(axes, /*sizes=*/kBlockSize, false));
+    parent_snode_ = &(root_snode_->dense(axes, /*sizes=*/kBlockSize));
     child_snode_ = &(parent_snode_->insert_children(SNodeType::place));
     child_snode_->dt = PrimitiveType::i32;
 
@@ -29,7 +29,7 @@ class BLSAnalyzerTest : public ::testing::Test {
 
     for_stmt_ = std::make_unique<OffloadedStmt>(
         /*task_type=*/OffloadedTaskType::struct_for,
-        /*arch=*/Arch::x64);
+        /*arch=*/Arch::x64, nullptr);
     for_stmt_->mem_access_opt.add_flag(child_snode_,
                                        SNodeAccessFlag::block_local);
     pads_.insert(child_snode_);

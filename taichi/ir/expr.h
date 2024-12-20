@@ -10,6 +10,7 @@ class Expression;
 class Identifier;
 class ExprGroup;
 class SNode;
+class ASTBuilder;
 
 class Expr {
  public:
@@ -22,6 +23,8 @@ class Expr {
     atomic = false;
   }
 
+  explicit Expr(uint1 x);
+
   explicit Expr(int16 x);
 
   explicit Expr(int32 x);
@@ -32,7 +35,7 @@ class Expr {
 
   explicit Expr(float64 x);
 
-  Expr(std::shared_ptr<Expression> expr) : Expr() {
+  explicit Expr(std::shared_ptr<Expression> expr) : Expr() {
     this->expr = expr;
   }
 
@@ -53,6 +56,7 @@ class Expr {
     expr = o.expr;
   }
 
+  // NOLINTNEXTLINE(google-explicit-constructor)
   operator bool() const {
     return expr.get() != nullptr;
   }
@@ -81,8 +85,6 @@ class Expr {
   // std::variant<Expr, std::string> in FrontendPrintStmt.
   Expr &operator=(const Expr &o);
 
-  Expr operator[](const ExprGroup &indices) const;
-
   template <typename T, typename... Args>
   static Expr make(Args &&...args) {
     return Expr(std::make_shared<T>(std::forward<Args>(args)...));
@@ -90,8 +92,10 @@ class Expr {
 
   SNode *snode() const;
 
-  // traceback for type checking error message
-  void set_tb(const std::string &tb);
+  // debug info, contains traceback for type checking error message
+  void set_dbg_info(const DebugInfo &dbg_info);
+
+  const std::string &get_tb() const;
 
   void set_adjoint(const Expr &o);
 
@@ -101,7 +105,9 @@ class Expr {
 
   DataType get_ret_type() const;
 
-  void type_check(CompileConfig *config);
+  DataType get_rvalue_type() const;
+
+  void type_check(const CompileConfig *config);
 };
 
 // Value cast
@@ -132,17 +138,15 @@ Expr expr_rand() {
   return taichi::lang::expr_rand(get_data_type<T>());
 }
 
-Expr snode_append(SNode *snode, const ExprGroup &indices, const Expr &val);
+Expr assume_range(const Expr &expr,
+                  const Expr &base,
+                  int low,
+                  int high,
+                  const DebugInfo &dbg_info = DebugInfo());
 
-Expr snode_is_active(SNode *snode, const ExprGroup &indices);
-
-Expr snode_length(SNode *snode, const ExprGroup &indices);
-
-Expr snode_get_addr(SNode *snode, const ExprGroup &indices);
-
-Expr assume_range(const Expr &expr, const Expr &base, int low, int high);
-
-Expr loop_unique(const Expr &input, const std::vector<SNode *> &covers);
+Expr loop_unique(const Expr &input,
+                 const std::vector<SNode *> &covers,
+                 const DebugInfo &dbg_info = DebugInfo());
 
 Expr expr_field(Expr id_expr, DataType dt);
 

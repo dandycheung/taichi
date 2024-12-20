@@ -4,13 +4,21 @@
 #include "taichi/common/core.h"
 #include "taichi/util/io.h"
 #include "taichi/util/lang_util.h"
+#include "taichi/util/file_sequence_writer.h"
 #include "taichi/program/program.h"
 #include "taichi/ir/ir.h"
 #include "taichi/ir/statements.h"
-#include "taichi/util/statistics.h"
 #include "taichi/ir/transforms.h"
 #include "taichi/ir/analysis.h"
 #include "taichi/analysis/offline_cache_util.h"
+
+#include "llvm/Support/Host.h"
+#include "llvm/MC/TargetRegistry.h"
+#include "llvm/Transforms/IPO.h"
+#include "llvm/Transforms/IPO/PassManagerBuilder.h"
+#include "llvm/Analysis/TargetTransformInfo.h"
+#include "llvm/ExecutionEngine/Orc/JITTargetMachineBuilder.h"
+
 namespace taichi::lang {
 
 namespace {
@@ -19,8 +27,12 @@ class TaskCodeGenCPU : public TaskCodeGenLLVM {
  public:
   using IRVisitor::visit;
 
-  TaskCodeGenCPU(Kernel *kernel, IRNode *ir)
-      : TaskCodeGenLLVM(kernel, ir, nullptr) {
+  TaskCodeGenCPU(int id,
+                 const CompileConfig &config,
+                 TaichiLLVMContext &tlctx,
+                 const Kernel *kernel,
+                 IRNode *ir)
+      : TaskCodeGenLLVM(id, config, tlctx, kernel, ir, nullptr) {
     TI_AUTO_PROF
   }
 
@@ -55,16 +67,6 @@ class TaskCodeGenCPU : public TaskCodeGenLLVM {
     llvm::Value *epilogue = create_xlogue(stmt->tls_epilogue);
 
     auto [begin, end] = get_range_for_bounds(stmt);
-
-    // adaptive block_dim
-    if (prog->this_thread_config().cpu_block_dim_adaptive) {
-      int num_items = (stmt->end_value - stmt->begin_value) / std::abs(step);
-      int num_threads = stmt->num_cpu_threads;
-      int items_per_thread = std::max(1, num_items / (num_threads * 32));
-      // keep each task has at least 512 items to amortize scheduler overhead
-      // also saturate the value to 1024 for better load balancing
-      stmt->block_dim = std::min(1024, std::max(512, items_per_thread));
-    }
 
     call("cpu_parallel_range_for", get_arg(0),
          tlctx->get_constant(stmt->num_cpu_threads), begin, end,
@@ -104,12 +106,8 @@ class TaskCodeGenCPU : public TaskCodeGenLLVM {
 
       {
         builder->SetInsertPoint(loop_test_bb);
-#ifdef TI_LLVM_15
         auto *loop_index_load =
             builder->CreateLoad(builder->getInt32Ty(), loop_index);
-#else
-        auto *loop_index_load = builder->CreateLoad(loop_index);
-#endif
         auto cond = builder->CreateICmp(
             llvm::CmpInst::Predicate::ICMP_SLT, loop_index_load,
             llvm_val[stmt->owned_num_local.find(stmt->major_from_type)
@@ -124,12 +122,8 @@ class TaskCodeGenCPU : public TaskCodeGenLLVM {
           auto &s = stmt->body->statements[i];
           s->accept(this);
         }
-#ifdef TI_LLVM_15
         auto *loop_index_load =
             builder->CreateLoad(builder->getInt32Ty(), loop_index);
-#else
-        auto *loop_index_load = builder->CreateLoad(loop_index);
-#endif
         builder->CreateStore(
             builder->CreateAdd(loop_index_load, tlctx->get_constant(1)),
             loop_index);
@@ -169,15 +163,13 @@ class TaskCodeGenCPU : public TaskCodeGenLLVM {
   }
 
   void visit(OffloadedStmt *stmt) override {
-    stat.add("codegen_offloaded_tasks");
     TI_ASSERT(current_offload == nullptr);
     current_offload = stmt;
     if (stmt->bls_size > 0)
       create_bls_buffer(stmt);
     using Type = OffloadedStmt::TaskType;
     auto offloaded_task_name = init_offloaded_task_function(stmt);
-    if (prog->this_thread_config().kernel_profiler &&
-        arch_is_cpu(prog->this_thread_config().arch)) {
+    if (compile_config.kernel_profiler && arch_is_cpu(compile_config.arch)) {
       call("LLVMRuntime_profiler_start", get_runtime(),
            builder->CreateGlobalStringPtr(offloaded_task_name));
     }
@@ -198,8 +190,7 @@ class TaskCodeGenCPU : public TaskCodeGenLLVM {
     } else {
       TI_NOT_IMPLEMENTED
     }
-    if (prog->this_thread_config().kernel_profiler &&
-        arch_is_cpu(prog->this_thread_config().arch)) {
+    if (compile_config.kernel_profiler && arch_is_cpu(compile_config.arch)) {
       llvm::IRBuilderBase::InsertPointGuard guard(*builder);
       builder->SetInsertPoint(final_block);
       call("LLVMRuntime_profiler_stop", get_runtime());
@@ -219,73 +210,146 @@ class TaskCodeGenCPU : public TaskCodeGenLLVM {
       TI_NOT_IMPLEMENTED
     }
   }
+
+ private:
+  std::tuple<llvm::Value *, llvm::Value *> get_spmd_info() override {
+    auto thread_idx = tlctx->get_constant(0);
+    auto block_dim = tlctx->get_constant(1);
+    return std::make_tuple(thread_idx, block_dim);
+  }
 };
+
+static llvm::Triple get_host_target_triple() {
+  auto expected_jtmb = llvm::orc::JITTargetMachineBuilder::detectHost();
+  if (!expected_jtmb) {
+    TI_ERROR("LLVM TargetMachineBuilder has failed.");
+  }
+  return expected_jtmb->getTargetTriple();
+}
 
 }  // namespace
 
 #ifdef TI_WITH_LLVM
-// static
-std::unique_ptr<TaskCodeGenLLVM> KernelCodeGenCPU::make_codegen_llvm(
-    Kernel *kernel,
-    IRNode *ir) {
-  return std::make_unique<TaskCodeGenCPU>(kernel, ir);
-}
-
-FunctionType CPUModuleToFunctionConverter::convert(
-    const std::string &kernel_name,
-    const std::vector<LlvmLaunchArgInfo> &args,
-    LLVMCompiledKernel data) const {
-  TI_AUTO_PROF;
-  auto jit_module = tlctx_->create_jit_module(std::move(data.module));
-  using TaskFunc = int32 (*)(void *);
-  std::vector<TaskFunc> task_funcs;
-  task_funcs.reserve(data.tasks.size());
-  for (auto &task : data.tasks) {
-    auto *func_ptr = jit_module->lookup_function(task.name);
-    TI_ASSERT_INFO(func_ptr, "Offloaded datum function {} not found",
-                   task.name);
-    task_funcs.push_back((TaskFunc)(func_ptr));
-  }
-  // Do NOT capture `this`...
-  return [executor = this->executor_, args, kernel_name,
-          task_funcs](RuntimeContext &context) {
-    TI_TRACE("Launching kernel {}", kernel_name);
-    // For taichi ndarrays, context.args saves pointer to its
-    // |DeviceAllocation|, CPU backend actually want to use the raw ptr here.
-    for (int i = 0; i < (int)args.size(); i++) {
-      if (args[i].is_array &&
-          context.device_allocation_type[i] !=
-              RuntimeContext::DevAllocType::kNone &&
-          context.array_runtime_sizes[i] > 0) {
-        DeviceAllocation *ptr =
-            static_cast<DeviceAllocation *>(context.get_arg<void *>(i));
-        uint64 host_ptr = (uint64)executor->get_ndarray_alloc_info_ptr(*ptr);
-        context.set_arg(i, host_ptr);
-        context.set_array_device_allocation_type(
-            i, RuntimeContext::DevAllocType::kNone);
-      }
-    }
-    for (auto task : task_funcs) {
-      task(&context);
-    }
-  };
-}
-
 LLVMCompiledTask KernelCodeGenCPU::compile_task(
+    int task_codegen_id,
+    const CompileConfig &config,
     std::unique_ptr<llvm::Module> &&module,
-    OffloadedStmt *stmt) {
-  TaskCodeGenCPU gen(kernel, stmt);
+    IRNode *block) {
+  TaskCodeGenCPU gen(task_codegen_id, config, get_taichi_llvm_context(), kernel,
+                     block);
   return gen.run_compilation();
 }
-#endif  // TI_WITH_LLVM
 
-FunctionType KernelCodeGenCPU::compile_to_function() {
-  TI_AUTO_PROF;
-  auto *llvm_prog = get_llvm_program(prog);
-  auto *tlctx = llvm_prog->get_llvm_context(kernel->arch);
+void KernelCodeGenCPU::optimize_module(llvm::Module *module) {
+  TI_AUTO_PROF
+  const auto &compile_config = get_compile_config();
+  auto triple = get_host_target_triple();
 
-  CPUModuleToFunctionConverter converter(
-      tlctx, get_llvm_program(prog)->get_runtime_executor());
-  return converter.convert(kernel, compile_kernel_to_module());
+  std::string err_str;
+  const llvm::Target *target =
+      llvm::TargetRegistry::lookupTarget(triple.str(), err_str);
+  TI_ERROR_UNLESS(target, err_str);
+
+  llvm::TargetOptions options;
+  if (compile_config.fast_math) {
+    options.AllowFPOpFusion = llvm::FPOpFusion::Fast;
+    options.UnsafeFPMath = 1;
+    options.NoInfsFPMath = 1;
+    options.NoNaNsFPMath = 1;
+  } else {
+    options.AllowFPOpFusion = llvm::FPOpFusion::Strict;
+    options.UnsafeFPMath = 0;
+    options.NoInfsFPMath = 0;
+    options.NoNaNsFPMath = 0;
+  }
+  options.HonorSignDependentRoundingFPMathOption = false;
+  options.NoZerosInBSS = false;
+  options.GuaranteedTailCallOpt = false;
+
+  llvm::legacy::FunctionPassManager function_pass_manager(module);
+  llvm::legacy::PassManager module_pass_manager;
+
+  llvm::StringRef mcpu = llvm::sys::getHostCPUName();
+  std::unique_ptr<llvm::TargetMachine> target_machine(
+      target->createTargetMachine(triple.str(), mcpu.str(), "", options,
+                                  llvm::Reloc::PIC_, llvm::CodeModel::Small,
+                                  llvm::CodeGenOpt::Aggressive));
+
+  TI_ERROR_UNLESS(target_machine.get(), "Could not allocate target machine!");
+
+  module->setDataLayout(target_machine->createDataLayout());
+
+  module_pass_manager.add(llvm::createTargetTransformInfoWrapperPass(
+      target_machine->getTargetIRAnalysis()));
+  function_pass_manager.add(llvm::createTargetTransformInfoWrapperPass(
+      target_machine->getTargetIRAnalysis()));
+
+  llvm::PassManagerBuilder b;
+  b.OptLevel = 3;
+  b.Inliner = llvm::createFunctionInliningPass(b.OptLevel, 0, false);
+  b.LoopVectorize = true;
+  b.SLPVectorize = true;
+
+  target_machine->adjustPassManager(b);
+
+  b.populateFunctionPassManager(function_pass_manager);
+  b.populateModulePassManager(module_pass_manager);
+
+  {
+    TI_PROFILER("llvm_function_pass");
+    function_pass_manager.doInitialization();
+    for (llvm::Module::iterator i = module->begin(); i != module->end(); i++)
+      function_pass_manager.run(*i);
+
+    function_pass_manager.doFinalization();
+  }
+
+  /*
+    Optimization for llvm::GetElementPointer:
+    https://github.com/taichi-dev/taichi/issues/5472 The three other passes
+    "loop-reduce", "ind-vars", "cse" serves as preprocessing for
+    "separate-const-offset-gep".
+
+    Note there's an update for "separate-const-offset-gep" in llvm-12.
+  */
+  module_pass_manager.add(llvm::createLoopStrengthReducePass());
+  module_pass_manager.add(llvm::createIndVarSimplifyPass());
+  module_pass_manager.add(llvm::createSeparateConstOffsetFromGEPPass(false));
+  module_pass_manager.add(llvm::createEarlyCSEPass(true));
+
+  llvm::SmallString<8> outstr;
+  llvm::raw_svector_ostream ostream(outstr);
+  ostream.SetUnbuffered();
+  if (compile_config.print_kernel_asm) {
+    // Generate assembly code if neccesary
+    target_machine->addPassesToEmitFile(module_pass_manager, ostream, nullptr,
+                                        llvm::CGFT_AssemblyFile);
+  }
+
+  {
+    TI_PROFILER("llvm_module_pass");
+    module_pass_manager.run(*module);
+  }
+
+  if (compile_config.print_kernel_asm) {
+    static FileSequenceWriter writer(
+        "taichi_kernel_cpu_llvm_ir_optimized_asm_{:04d}.s",
+        "optimized assembly code (CPU)");
+    std::string buffer(outstr.begin(), outstr.end());
+    writer.write(buffer);
+  }
+
+  if (compile_config.print_kernel_llvm_ir_optimized) {
+    if (false) {
+      TI_INFO("Functions with > 100 instructions in optimized LLVM IR:");
+      TaichiLLVMContext::print_huge_functions(module);
+    }
+    static FileSequenceWriter writer(
+        "taichi_kernel_cpu_llvm_ir_optimized_{:04d}.ll",
+        "optimized LLVM IR (CPU)");
+    writer.write(module);
+  }
 }
+
+#endif  // TI_WITH_LLVM
 }  // namespace taichi::lang

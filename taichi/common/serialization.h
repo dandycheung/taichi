@@ -6,7 +6,7 @@
 #pragma once
 
 #include <array>
-#include <cassert>
+#include <assert.h>
 #include <cstring>
 #include <fstream>
 #include <iostream>
@@ -18,8 +18,13 @@
 #include <type_traits>
 #include <unordered_map>
 #include <vector>
+#include "taichi/common/json.h"
+#include "taichi/common/json_serde.h"
+#include "taichi/common/zip.h"
 
 #ifdef TI_INCLUDED
+#include "taichi/common/logging.h"
+
 namespace taichi {
 #else
 #define TI_TRACE
@@ -137,17 +142,11 @@ serialize_kv_impl(SER &ser,
   template <typename S> \
   void io(S &serializer) const
 
-#define TI_IO_DEF(...)           \
-  template <typename S>          \
-  void io(S &serializer) const { \
-    TI_IO(__VA_ARGS__);          \
-  }
-
-#define TI_IO_DEF_WITH_BASECLASS(BaseClass, ...) \
-  template <typename S>                          \
-  void io(S &serializer) const {                 \
-    this->BaseClass::io(serializer);             \
-    TI_IO(__VA_ARGS__);                          \
+#define TI_IO_DEF(...)             \
+  L_JSON_SERDE_FIELDS(__VA_ARGS__) \
+  template <typename S>            \
+  void io(S &serializer) const {   \
+    TI_IO(__VA_ARGS__);            \
   }
 
 // This macro serializes each field with its name by doing the following:
@@ -208,6 +207,24 @@ class Serializer {
   };
 
   template <typename T>
+  struct has_ptr_io {
+    template <typename T_>
+    static constexpr auto helper(T_ *)
+        -> std::is_same<decltype((T_::ptr_io(std::declval<const T_ *&>(),
+                                             std::declval<Serializer &>(),
+                                             std::declval<bool>()))),
+                        void>;
+
+    template <typename>
+    static constexpr auto helper(...) -> std::false_type;
+
+   public:
+    using T__ = typename type::remove_cvref_t<T>;
+    using type = decltype(helper<T__>(nullptr));
+    static constexpr bool value = type::value;
+  };
+
+  template <typename T>
   struct has_free_io {
     template <typename T_>
     static constexpr auto helper(T_ *) ->
@@ -236,7 +253,7 @@ inline std::vector<uint8_t> read_data_from_file(const std::string &fn) {
     return zip::read(fn);
   } else {
     // Read uncompressed file, e.g. particles.tcb
-    assert(f != nullptr);
+    TI_ASSERT(f != nullptr);
     std::size_t length = 0;
     while (true) {
       size_t limit = 1 << 8;
@@ -261,7 +278,7 @@ inline void write_data_to_file(const std::string &fn,
   if (f == nullptr) {
     TI_ERROR("Cannot open file [{}] for writing. (Does the directory exist?)",
              fn);
-    assert(f != nullptr);
+    TI_ASSERT(f != nullptr);
   }
   if (ends_with(fn, ".tcb.zip")) {
     std::fclose(f);
@@ -307,10 +324,19 @@ class BinarySerializer : public Serializer {
   void write_to_file(const std::string &fn) {
     void *ptr = c_data;
     if (!ptr) {
-      assert(!data.empty());
+      TI_ASSERT(!data.empty());
       ptr = &data[0];
     }
     write_data_to_file(fn, reinterpret_cast<uint8_t *>(ptr), head);
+  }
+
+  void write_to_stream(std::ostream &os) {
+    void *ptr = c_data;
+    if (!ptr) {
+      TI_ASSERT(!data.empty());
+      ptr = &data[0];
+    }
+    os.write(reinterpret_cast<const char *>(ptr), head);
   }
 
   template <bool writing_ = writing>
@@ -323,7 +349,7 @@ class BinarySerializer : public Serializer {
       TI_TRACE("preserved = {}", preserved_);
       // Preserved mode
       this->preserved = preserved_;
-      assert(c_data != nullptr);
+      TI_ASSERT(c_data != nullptr);
       this->c_data = (uint8_t *)c_data;
     } else {
       // otherwise use a std::vector<uint8_t>
@@ -339,11 +365,11 @@ class BinarySerializer : public Serializer {
       void *raw_data,
       std::size_t preserved_ = std::size_t(0)) {
     if (preserved_ != 0) {
-      assert(raw_data == nullptr);
+      TI_ASSERT(raw_data == nullptr);
       data.resize(preserved_);
       c_data = &data[0];
     } else {
-      assert(raw_data != nullptr);
+      TI_ASSERT(raw_data != nullptr);
       c_data = reinterpret_cast<uint8_t *>(raw_data);
     }
     head = sizeof(std::size_t);
@@ -363,7 +389,7 @@ class BinarySerializer : public Serializer {
         *reinterpret_cast<std::size_t *>(&data[0]) = head;
       }
     } else {
-      assert(head == retrieve_length());
+      TI_ASSERT(head == retrieve_length());
     }
   }
 
@@ -506,8 +532,10 @@ class BinarySerializer : public Serializer {
 
   // Raw pointers (no ownership)
   template <typename T>
-  typename std::enable_if<std::is_pointer<T>::value, void>::type process(
-      const T &val_) {
+  typename std::enable_if<std::is_pointer<T>::value &&
+                              !has_ptr_io<std::remove_pointer_t<T>>::value,
+                          void>::type
+  process(const T &val_) {
     auto &val = get_writable(val_);
     if (writing) {
       this->process(ptr_to_int(val));
@@ -526,6 +554,17 @@ class BinarySerializer : public Serializer {
             assets[val_ptr]);
       }
     }
+  }
+
+  // Pointer with a custom serialization function.
+  template <typename T>
+  typename std::enable_if<std::is_pointer<T>::value &&
+                              has_ptr_io<std::remove_pointer_t<T>>::value,
+                          void>::type
+  process(const T &val_) {
+    using T_ = std::remove_pointer_t<T>;
+    auto &val = get_writable(val_);
+    T_::ptr_io((const T_ *&)val, *this, writing);
   }
 
   // enum class
@@ -647,7 +686,7 @@ class TextSerializer : public Serializer {
   template <typename T>
   inline static constexpr bool is_elementary_type_v =
       !has_io<T>::value && !has_free_io<T>::value && !std::is_enum_v<T> &&
-      std::is_pod_v<T>;
+      std::is_pod_v<T> && !std::is_pointer_v<T>;
 
  public:
   TextSerializer() {
@@ -764,6 +803,21 @@ class TextSerializer : public Serializer {
     add_raw(ss.str());
   }
 
+  // Pointer with a custom serialization function.
+  // TODO: switch to concept when C++20 is available
+  template <typename T>
+  std::enable_if_t<std::is_pointer_v<T> &&
+                       has_ptr_io<std::remove_pointer_t<T>>::value,
+                   void>
+  process(const T &val) {
+    add_raw("ptr {");
+    indent_++;
+    using T_ = std::remove_pointer_t<T>;
+    T_::ptr_io((const T_ *&)val, *this, true);
+    indent_--;
+    add_raw("}");
+  }
+
   template <typename T>
   std::enable_if_t<has_io<T>::value, void> process(const T &val) {
     add_raw("{");
@@ -806,9 +860,9 @@ class TextSerializer : public Serializer {
   void process(const std::pair<T, G> &val) {
     add_raw("[");
     indent_++;
-    process("first", val.first);
+    process(val.first);
     add_raw(", ");
-    process("second", val.second);
+    process(val.second);
     indent_--;
     add_raw("]");
   }
@@ -923,6 +977,15 @@ void write_to_binary_file(const T &t, const std::string &file_name) {
   writer(t);
   writer.finalize();
   writer.write_to_file(file_name);
+}
+
+template <typename T>
+void write_to_binary_stream(const T &t, std::ostream &os) {
+  BinaryOutputSerializer writer;
+  writer.initialize();
+  writer(t);
+  writer.finalize();
+  writer.write_to_stream(os);
 }
 
 // Compile-Time Tests

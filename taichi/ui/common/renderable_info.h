@@ -1,6 +1,6 @@
 #pragma once
 
-#include "taichi/ui/backends/vulkan/vertex.h"
+#include "taichi/ui/ggui/vertex.h"
 #include "taichi/program/field_info.h"
 #include "taichi/ui/utils/utils.h"
 
@@ -10,6 +10,7 @@ struct RenderableInfo {
   FieldInfo vbo;
   FieldInfo indices;
   bool has_per_vertex_color{false};
+  bool has_per_vertex_radius{false};
   VertexAttributes vbo_attrs{VboHelpers::all()};
   bool has_user_customized_draw{false};
   int draw_vertex_count{0};

@@ -87,7 +87,7 @@ void run(TiArch arch, const std::string &folder_dir) {
 }
 
 TEST_F(CapiTest, SphTestCuda) {
-  if (capi::utils::is_cuda_available()) {
+  if (ti::is_arch_available(TI_ARCH_CUDA)) {
     const auto folder_dir = getenv("TAICHI_AOT_FOLDER_PATH");
 
     std::stringstream aot_mod_ss;
@@ -98,7 +98,7 @@ TEST_F(CapiTest, SphTestCuda) {
 }
 
 TEST_F(CapiTest, SphTestVulkan) {
-  if (capi::utils::is_vulkan_available()) {
+  if (ti::is_arch_available(TI_ARCH_VULKAN)) {
     const auto folder_dir = getenv("TAICHI_AOT_FOLDER_PATH");
 
     std::stringstream aot_mod_ss;
@@ -108,8 +108,19 @@ TEST_F(CapiTest, SphTestVulkan) {
   }
 }
 
+TEST_F(CapiTest, SphTestMetal) {
+  if (ti::is_arch_available(TI_ARCH_METAL)) {
+    const auto folder_dir = getenv("TAICHI_AOT_FOLDER_PATH");
+
+    std::stringstream aot_mod_ss;
+    aot_mod_ss << folder_dir;
+
+    run(TiArch::TI_ARCH_METAL, aot_mod_ss.str());
+  }
+}
+
 TEST_F(CapiTest, SphTestOpengl) {
-  if (capi::utils::is_opengl_available()) {
+  if (ti::is_arch_available(TI_ARCH_OPENGL)) {
     const auto folder_dir = getenv("TAICHI_AOT_FOLDER_PATH");
 
     std::stringstream aot_mod_ss;

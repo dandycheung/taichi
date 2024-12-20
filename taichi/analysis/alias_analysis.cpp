@@ -14,6 +14,30 @@ AliasResult alias_analysis(Stmt *var1, Stmt *var2) {
   if (!var1 || !var2)
     return AliasResult::different;
 
+  if (var1->is<ExternalTensorBasePtrStmt>() ||
+      var2->is<ExternalTensorBasePtrStmt>()) {
+    auto *base = var1->cast<ExternalTensorBasePtrStmt>();
+    Stmt *other = var2;
+    if (!base) {
+      base = var2->cast<ExternalTensorBasePtrStmt>();
+      other = var1;
+    }
+    auto *external_ptr = other->cast<ExternalPtrStmt>();
+    if (!external_ptr) {
+      if (auto *matrix_ptr = other->cast<MatrixPtrStmt>()) {
+        external_ptr = matrix_ptr->origin->cast<ExternalPtrStmt>();
+      }
+      if (!external_ptr)
+        return AliasResult::different;
+    }
+    if (base->is_grad != external_ptr->is_grad)
+      return AliasResult::different;
+    if (base->arg_id == external_ptr->base_ptr->as<ArgLoadStmt>()->arg_id) {
+      return AliasResult::uncertain;
+    }
+    return AliasResult::different;
+  }
+
   // TODO: further optimize with offset inside MatrixPtrStmt
   // If at least one of var1 and var2 is local, they will be treated here.
   auto retrieve_local = [&](Stmt *var) {
@@ -29,17 +53,24 @@ AliasResult alias_analysis(Stmt *var1, Stmt *var2) {
   Stmt *origin1 = retrieve_local(var1);
   Stmt *origin2 = retrieve_local(var2);
   if (origin1 != nullptr && origin2 != nullptr) {
-    if (origin1 == origin2) {
-      if (var1->is<MatrixPtrStmt>() && var2->is<MatrixPtrStmt>()) {
+    if (var1->is<MatrixPtrStmt>() && var2->is<MatrixPtrStmt>()) {
+      if (origin1 == origin2 ||
+          alias_analysis(origin1, origin2) == AliasResult::same) {
         auto diff = value_diff_ptr_index(var1->cast<MatrixPtrStmt>()->offset,
                                          var2->cast<MatrixPtrStmt>()->offset);
         if (diff.is_diff_certain) {
           return diff.diff_range == 0 ? AliasResult::same
                                       : AliasResult::different;
         }
+      } else {
+        return AliasResult::different;
       }
+    }
+
+    if (origin1 == origin2) {
       return AliasResult::uncertain;
     }
+
     if (origin1->is<AllocaStmt>() || origin2->is<AllocaStmt>())
       return AliasResult::different;
     TI_ASSERT(origin1->is<GlobalTemporaryStmt>() &&
@@ -99,9 +130,11 @@ AliasResult alias_analysis(Stmt *var1, Stmt *var2) {
     if (ptr1->base_ptr != ptr2->base_ptr) {
       auto base1 = ptr1->base_ptr->as<ArgLoadStmt>();
       auto base2 = ptr2->base_ptr->as<ArgLoadStmt>();
-      if (base1->arg_id != base2->arg_id) {
+      if (base1->arg_id != base2->arg_id || ptr1->is_grad != ptr2->is_grad) {
         return AliasResult::different;
       }
+    } else if (ptr1->is_grad != ptr2->is_grad) {
+      return AliasResult::different;
     }
     TI_ASSERT(ptr1->indices.size() == ptr2->indices.size());
     bool uncertain = false;

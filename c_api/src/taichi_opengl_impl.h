@@ -1,6 +1,8 @@
 #pragma once
+#ifdef TI_WITH_OPENGL
+
 #include "taichi_gfx_impl.h"
-#include "taichi/taichi_opengl.h"
+#include "taichi/rhi/opengl/opengl_api.h"
 #include "taichi/rhi/opengl/opengl_device.h"
 
 class OpenglRuntime : public GfxRuntime {
@@ -16,3 +18,5 @@ class OpenglRuntime : public GfxRuntime {
     return device_;
   }
 };
+
+#endif  // TI_WITH_OPENGL

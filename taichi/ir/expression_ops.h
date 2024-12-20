@@ -12,25 +12,19 @@
   Expr expr_##opname(const Expr &expr) {                             \
     return Expr::make<UnaryOpExpression>(UnaryOpType::opname, expr); \
   }                                                                  \
-  Expr operator op(const Expr &expr) {                               \
-    return expr_##opname(expr);                                      \
-  }
+  Expr operator op(const Expr &expr) { return expr_##opname(expr); }
 
 #define DEFINE_EXPRESSION_FUNC_UNARY(opname)                         \
   Expr opname(const Expr &expr) {                                    \
     return Expr::make<UnaryOpExpression>(UnaryOpType::opname, expr); \
   }                                                                  \
-  Expr expr_##opname(const Expr &expr) {                             \
-    return opname(expr);                                             \
-  }
+  Expr expr_##opname(const Expr &expr) { return opname(expr); }
 
 #define DEFINE_EXPRESSION_OP_BINARY(op, opname)                            \
   Expr operator op(const Expr &lhs, const Expr &rhs) {                     \
     return Expr::make<BinaryOpExpression>(BinaryOpType::opname, lhs, rhs); \
   }                                                                        \
-  Expr expr_##opname(const Expr &lhs, const Expr &rhs) {                   \
-    return lhs op rhs;                                                     \
-  }
+  Expr expr_##opname(const Expr &lhs, const Expr &rhs) { return lhs op rhs; }
 
 #define DEFINE_EXPRESSION_FUNC_BINARY(opname)                              \
   Expr opname(const Expr &lhs, const Expr &rhs) {                          \
@@ -78,6 +72,7 @@ namespace taichi::lang {
 DEFINE_EXPRESSION_FUNC_UNARY(sqrt)
 DEFINE_EXPRESSION_FUNC_UNARY(round)
 DEFINE_EXPRESSION_FUNC_UNARY(floor)
+DEFINE_EXPRESSION_FUNC_UNARY(frexp)
 DEFINE_EXPRESSION_FUNC_UNARY(ceil)
 DEFINE_EXPRESSION_FUNC_UNARY(abs)
 DEFINE_EXPRESSION_FUNC_UNARY(sin)
@@ -91,6 +86,8 @@ DEFINE_EXPRESSION_FUNC_UNARY(rcp)
 DEFINE_EXPRESSION_FUNC_UNARY(rsqrt)
 DEFINE_EXPRESSION_FUNC_UNARY(exp)
 DEFINE_EXPRESSION_FUNC_UNARY(log)
+DEFINE_EXPRESSION_FUNC_UNARY(popcnt)
+DEFINE_EXPRESSION_FUNC_UNARY(clz)
 DEFINE_EXPRESSION_FUNC_UNARY(logic_not)
 DEFINE_EXPRESSION_OP_UNARY(~, bit_not)
 DEFINE_EXPRESSION_OP_UNARY(-, neg)

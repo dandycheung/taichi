@@ -19,7 +19,7 @@ class BinaryOpSimplifyTest : public ::testing::Test {
 TEST_F(BinaryOpSimplifyTest, MultiplyPOT) {
   IRBuilder builder;
   // (x * 32) << 3
-  auto *x = builder.create_arg_load(0, get_data_type<int>(), false);
+  auto *x = builder.create_arg_load({0}, get_data_type<int>(), false, 0);
   auto *product = builder.create_mul(x, builder.get_int32(32));
   auto *result = builder.create_shl(product, builder.get_int32(3));
   builder.create_return(result);
@@ -33,7 +33,7 @@ TEST_F(BinaryOpSimplifyTest, MultiplyPOT) {
   // -> (x << 5) << 3
   irpass::binary_op_simplify(ir_block, CompileConfig());
   // -> x << (5 + 3)
-  irpass::constant_fold(ir_block, CompileConfig(), {tp_.prog()});
+  irpass::constant_fold(ir_block);
   // -> x << 8
   irpass::die(ir_block);
 
@@ -56,7 +56,7 @@ TEST_F(BinaryOpSimplifyTest, ModPOT) {
   IRBuilder builder;
   // x % 8 in the Python frontend is transformed into:
   // x - x / 8 * 8
-  auto *x = builder.create_arg_load(0, get_data_type<uint32>(), false);
+  auto *x = builder.create_arg_load({0}, get_data_type<uint32>(), false, 0);
   auto *division = builder.create_div(x, builder.get_uint32(8));
   auto *product = builder.create_mul(division, builder.get_uint32(8));
   auto *result = builder.create_sub(x, product);
@@ -83,7 +83,7 @@ TEST_F(BinaryOpSimplifyTest, ModPOT) {
   EXPECT_EQ(ir_block->size(), 5);
 
   // -> x & 7
-  irpass::constant_fold(ir_block, CompileConfig(), {tp_.prog()});
+  irpass::constant_fold(ir_block);
   irpass::die(ir_block);
   EXPECT_EQ(ir_block->size(), 4);
   EXPECT_EQ(ir_block->statements[0].get(), x);

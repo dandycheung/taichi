@@ -1,3 +1,21 @@
+function UnsetGitCachingProxy {
+    Write-Host "Unsetting git caching proxy"
+    git config --global --list | Select-String 'url\.' | ForEach-Object {
+        $key = $_ -split '=' | Select-Object -First 1
+        git config --global --unset-all $key
+    }
+}
+
+function SetGitCachingProxy {
+    Write-Host "Setting up git caching proxy"
+    git config --global --add "url.http://oauth2:${env:GITHUB_TOKEN}@git-cdn-github.botmaster.tgr/.insteadOf" https://github.com/
+    git config --global --add "url.http://oauth2:${env:GITHUB_TOKEN}@git-cdn-github.botmaster.tgr/.insteadOf" git@github.com:
+}
+
+if($env:TI_USE_GIT_CACHE) {
+    SetGitCachingProxy
+}
+
 function Info($text, $prefix="BUILD") {
     Write-Host -ForegroundColor Green "[$prefix] $text"
 }
@@ -71,7 +89,7 @@ function Setup-VS {
     Info "Setting up Visual Studio"
     foreach($progRoot in $env:ProgramFiles, ${env:ProgramFiles(x86)}) {
         $vsBase = Join-Path $progRoot 'Microsoft Visual Studio'
-        foreach($ver in '2022','2019') {
+        foreach($ver in '2022') {
             foreach($edition in 'Enterprise','Professional','Community','BuildTools') {
                 $vsPath = Join-Path $vsBase $ver $edition
                 $clangPath = Join-Path $vsPath "VC\Tools\Llvm\x64\bin\clang.exe"
@@ -86,53 +104,6 @@ function Setup-VS {
     }
 
     throw "Could not find Visual Studio with Clang"
-}
-
-function Setup-Python($libsDir, $version = "3.7") {
-    if ([string]::IsNullOrEmpty($version)) {
-        throw "Should specify Python version"
-    }
-
-    Info "Setting up Python environment $version"
-
-    function PipOps {
-        Invoke python -m pip install -U pip wheel
-        Invoke python -m pip uninstall taichi taichi-nightly -y
-        # These have to be re-installed to avoid strange certificate issue
-        # on CPU docker environment
-        Invoke python -m pip install --upgrade --force-reinstall numpy cmake wheel
-    }
-
-    if (Get-Command python -ErrorAction SilentlyContinue) {
-        $ver = & python --version
-        Info "Found $ver" "Python"
-        if ($ver.Startswith("Python ${version}.")) {
-            Info "Using $ver" "Python"
-            $venv = "$libsDir/taichi-venv-$version"
-            if(-not (Test-Path $venv)) {
-                Invoke python -m venv $venv
-            }
-            . "$libsDir/taichi-venv-$version/Scripts/activate.ps1"
-            PipOps
-            return
-        }
-    }
-
-    if (Get-Command conda -ErrorAction SilentlyContinue) {
-        Info "Using conda environment" "Python"
-        # <Workaround> bad conda in container
-        Invoke conda shell.powershell hook | Out-String | Invoke-Expression
-        # </Workaround>
-        $condaEnv = "$libsDir/taichi-conda-$version"
-        if (-not (Test-Path $condaEnv)) {
-            conda create -y -q --prefix=$condaEnv python=$version
-        }
-        conda activate $condaEnv
-        PipOps
-        return
-    }
-
-    throw "Could not setup Python"
 }
 
 function Resolve-Path-String-Force {
@@ -272,6 +243,7 @@ function CIDockerRun {
         -e PIP_CACHE_DIR=X:/pip-cache `
         -e GIT_ALTERNATE_OBJECT_DIRECTORIES=X:/git-cache/objects `
         -e TI_CI=1 `
+        -e GITHUB_TOKEN `
         @TiEnvs `
         -v (($env:LocalAppData -replace "\\", "/") + "/build-cache:X:") `
         @extraArgs `

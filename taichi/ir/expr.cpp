@@ -6,15 +6,47 @@
 
 namespace taichi::lang {
 
-void Expr::set_tb(const std::string &tb) {
-  expr->tb = tb;
+void Expr::set_dbg_info(const DebugInfo &dbg_info) {
+  expr->dbg_info = dbg_info;
+}
+
+const std::string &Expr::get_tb() const {
+  return expr->get_tb();
 }
 
 DataType Expr::get_ret_type() const {
   return expr->ret_type;
 }
 
-void Expr::type_check(CompileConfig *config) {
+DataType Expr::get_rvalue_type() const {
+  if (auto argload = cast<ArgLoadExpression>()) {
+    if (argload->is_ptr) {
+      return argload->ret_type.ptr_removed();
+    }
+    return argload->ret_type;
+  }
+  if (auto id = cast<IdExpression>()) {
+    return id->ret_type.ptr_removed();
+  }
+  if (auto index_expr = cast<IndexExpression>()) {
+    return index_expr->ret_type.ptr_removed();
+  }
+  if (auto unary = cast<UnaryOpExpression>()) {
+    if (unary->type == UnaryOpType::frexp) {
+      return unary->ret_type.ptr_removed();
+    }
+    return unary->ret_type;
+  }
+  if (auto texture_op = cast<TextureOpExpression>()) {
+    if (texture_op->op == TextureOpType::kStore) {
+      return texture_op->ret_type.ptr_removed();
+    }
+    return texture_op->ret_type;
+  }
+  return expr->ret_type;
+}
+
+void Expr::type_check(const CompileConfig *config) {
   expr->type_check(config);
 }
 
@@ -24,12 +56,6 @@ Expr cast(const Expr &input, DataType dt) {
 
 Expr bit_cast(const Expr &input, DataType dt) {
   return Expr::make<UnaryOpExpression>(UnaryOpType::cast_bits, input, dt);
-}
-
-Expr Expr::operator[](const ExprGroup &indices) const {
-  TI_ASSERT(is<FieldExpression>() || is<MatrixFieldExpression>() ||
-            is<ExternalTensorExpression>() || is_tensor(expr->ret_type));
-  return Expr::make<IndexExpression>(*this, indices);
 }
 
 Expr &Expr::operator=(const Expr &o) {
@@ -53,6 +79,10 @@ void Expr::set_dual(const Expr &o) {
 
 void Expr::set_adjoint_checkbit(const Expr &o) {
   this->cast<FieldExpression>()->adjoint_checkbit.set(o);
+}
+
+Expr::Expr(uint1 x) : Expr() {
+  expr = std::make_shared<ConstExpression>(PrimitiveType::u1, x);
 }
 
 Expr::Expr(int16 x) : Expr() {
@@ -83,29 +113,18 @@ Expr expr_rand(DataType dt) {
   return Expr::make<RandExpression>(dt);
 }
 
-Expr snode_append(SNode *snode, const ExprGroup &indices, const Expr &val) {
-  return Expr::make<SNodeOpExpression>(snode, SNodeOpType::append, indices,
-                                       val);
+Expr assume_range(const Expr &expr,
+                  const Expr &base,
+                  int low,
+                  int high,
+                  const DebugInfo &dbg_info) {
+  return Expr::make<RangeAssumptionExpression>(expr, base, low, high, dbg_info);
 }
 
-Expr snode_is_active(SNode *snode, const ExprGroup &indices) {
-  return Expr::make<SNodeOpExpression>(snode, SNodeOpType::is_active, indices);
-}
-
-Expr snode_length(SNode *snode, const ExprGroup &indices) {
-  return Expr::make<SNodeOpExpression>(snode, SNodeOpType::length, indices);
-}
-
-Expr snode_get_addr(SNode *snode, const ExprGroup &indices) {
-  return Expr::make<SNodeOpExpression>(snode, SNodeOpType::get_addr, indices);
-}
-
-Expr assume_range(const Expr &expr, const Expr &base, int low, int high) {
-  return Expr::make<RangeAssumptionExpression>(expr, base, low, high);
-}
-
-Expr loop_unique(const Expr &input, const std::vector<SNode *> &covers) {
-  return Expr::make<LoopUniqueExpression>(input, covers);
+Expr loop_unique(const Expr &input,
+                 const std::vector<SNode *> &covers,
+                 const DebugInfo &dbg_info) {
+  return Expr::make<LoopUniqueExpression>(input, covers, dbg_info);
 }
 
 Expr expr_field(Expr id_expr, DataType dt) {

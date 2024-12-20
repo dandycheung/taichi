@@ -76,7 +76,8 @@ AliasResult alias_analysis(Stmt *var1, Stmt *var2);
 
 std::unique_ptr<ControlFlowGraph> build_cfg(IRNode *root);
 void check_fields_registered(IRNode *root);
-std::unique_ptr<IRNode> clone(IRNode *root, Kernel *kernel = nullptr);
+std::unique_ptr<IRNode> clone(IRNode *root);
+std::unique_ptr<Stmt> clone(Stmt *root);
 int count_statements(IRNode *root);
 
 /**
@@ -95,21 +96,31 @@ bool definitely_same_address(Stmt *var1, Stmt *var2);
 
 std::unordered_set<Stmt *> detect_fors_with_break(IRNode *root);
 std::unordered_set<Stmt *> detect_loops_with_continue(IRNode *root);
+std::unordered_map<Stmt *, std::vector<std::pair<Stmt *, int>>>
+gather_statement_usages(IRNode *root);
+std::unordered_set<Stmt *> gather_immutable_local_vars(IRNode *root);
 std::unordered_set<SNode *> gather_deactivations(IRNode *root);
 std::pair<std::unordered_set<SNode *>, std::unordered_set<SNode *>>
 gather_snode_read_writes(IRNode *root);
 std::vector<Stmt *> gather_statements(IRNode *root,
                                       const std::function<bool(Stmt *)> &test);
 void gather_uniquely_accessed_bit_structs(IRNode *root, AnalysisManager *amgr);
-std::pair<std::unordered_map<const SNode *, GlobalPtrStmt *>,
-          std::unordered_map<int, ExternalPtrStmt *>>
+std::tuple<std::unordered_map<const SNode *, GlobalPtrStmt *>,
+           std::unordered_map<std::vector<int>,
+                              ExternalPtrStmt *,
+                              hashing::Hasher<std::vector<int>>>,
+           std::unordered_set<MatrixPtrStmt *>>
 gather_uniquely_accessed_pointers(IRNode *root);
+std::unordered_set<Stmt *> gather_dynamically_indexed_pointers(IRNode *root);
+
 std::unique_ptr<std::unordered_set<AtomicOpStmt *>> gather_used_atomics(
     IRNode *root);
-std::vector<Stmt *> get_load_pointers(Stmt *load_stmt);
+stmt_refs get_load_pointers(Stmt *load_stmt, bool get_aliased = false);
+stmt_refs include_aliased_stmts(stmt_refs dest);
 
-Stmt *get_store_data(Stmt *store_stmt);
-std::vector<Stmt *> get_store_destination(Stmt *store_stmt);
+Stmt *get_store_data(Stmt *store_stmt) noexcept;
+stmt_refs get_store_destination(Stmt *store_stmt,
+                                bool get_aliased = false) noexcept;
 bool has_store_or_atomic(IRNode *root, const std::vector<Stmt *> &vars);
 std::pair<bool, Stmt *> last_store_or_atomic(IRNode *root, Stmt *var);
 
@@ -207,7 +218,7 @@ std::unique_ptr<MeshBLSCaches> initialize_mesh_local_attribute(
     OffloadedStmt *offload,
     bool auto_mesh_local,
     const CompileConfig &config);
-
+void gather_func_store_dests(IRNode *ir);
 }  // namespace analysis
 }  // namespace irpass
 }  // namespace taichi::lang

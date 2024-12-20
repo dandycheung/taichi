@@ -2,6 +2,7 @@
 
 #include "taichi/ir/type.h"
 #include "taichi/ir/type_factory.h"
+#include "taichi/rhi/arch.h"
 
 namespace taichi::lang {
 
@@ -11,10 +12,16 @@ TI_DLL_EXPORT std::string data_type_name(DataType t);
 
 TI_DLL_EXPORT int data_type_size(DataType t);
 
-TI_DLL_EXPORT std::string data_type_format(DataType dt);
+TI_DLL_EXPORT int data_type_size_gfx(DataType t);
+
+TI_DLL_EXPORT std::string data_type_format(DataType dt, Arch arch = Arch::x64);
 
 inline int data_type_bits(DataType t) {
   return data_type_size(t) * 8;
+}
+
+inline size_t align_up(size_t x, size_t alignment) {
+  return (x + alignment - 1) / alignment * alignment;
 }
 
 template <typename T>
@@ -33,6 +40,8 @@ inline DataType get_data_type() {
     return PrimitiveType::i32;
   } else if (std::is_same<T, int64>()) {
     return PrimitiveType::i64;
+  } else if (std::is_same<T, uint1>()) {
+    return PrimitiveType::u1;
   } else if (std::is_same<T, uint8>()) {
     return PrimitiveType::u8;
   } else if (std::is_same<T, uint16>()) {
@@ -96,6 +105,7 @@ inline bool is_integral(DataType dt) {
          dt->is_primitive(PrimitiveTypeID::i16) ||
          dt->is_primitive(PrimitiveTypeID::i32) ||
          dt->is_primitive(PrimitiveTypeID::i64) ||
+         dt->is_primitive(PrimitiveTypeID::u1) ||
          dt->is_primitive(PrimitiveTypeID::u8) ||
          dt->is_primitive(PrimitiveTypeID::u16) ||
          dt->is_primitive(PrimitiveTypeID::u32) ||
@@ -141,6 +151,8 @@ inline TypedConstant get_max_value(DataType dt) {
     return {dt, std::numeric_limits<int32>::max()};
   } else if (dt->is_primitive(PrimitiveTypeID::i64)) {
     return {dt, std::numeric_limits<int64>::max()};
+  } else if (dt->is_primitive(PrimitiveTypeID::u1)) {
+    return {dt, std::numeric_limits<uint1>::max()};
   } else if (dt->is_primitive(PrimitiveTypeID::u8)) {
     return {dt, std::numeric_limits<uint8>::max()};
   } else if (dt->is_primitive(PrimitiveTypeID::u16)) {
@@ -160,25 +172,27 @@ inline TypedConstant get_max_value(DataType dt) {
 
 inline TypedConstant get_min_value(DataType dt) {
   if (dt->is_primitive(PrimitiveTypeID::i8)) {
-    return {dt, std::numeric_limits<int8>::min()};
+    return {dt, std::numeric_limits<int8>::lowest()};
   } else if (dt->is_primitive(PrimitiveTypeID::i16)) {
-    return {dt, std::numeric_limits<int16>::min()};
+    return {dt, std::numeric_limits<int16>::lowest()};
   } else if (dt->is_primitive(PrimitiveTypeID::i32)) {
-    return {dt, std::numeric_limits<int32>::min()};
+    return {dt, std::numeric_limits<int32>::lowest()};
   } else if (dt->is_primitive(PrimitiveTypeID::i64)) {
-    return {dt, std::numeric_limits<int64>::min()};
+    return {dt, std::numeric_limits<int64>::lowest()};
+  } else if (dt->is_primitive(PrimitiveTypeID::u1)) {
+    return {dt, std::numeric_limits<uint1>::lowest()};
   } else if (dt->is_primitive(PrimitiveTypeID::u8)) {
-    return {dt, std::numeric_limits<uint8>::min()};
+    return {dt, std::numeric_limits<uint8>::lowest()};
   } else if (dt->is_primitive(PrimitiveTypeID::u16)) {
-    return {dt, std::numeric_limits<uint16>::min()};
+    return {dt, std::numeric_limits<uint16>::lowest()};
   } else if (dt->is_primitive(PrimitiveTypeID::u32)) {
-    return {dt, std::numeric_limits<uint32>::min()};
+    return {dt, std::numeric_limits<uint32>::lowest()};
   } else if (dt->is_primitive(PrimitiveTypeID::u64)) {
-    return {dt, std::numeric_limits<uint64>::min()};
+    return {dt, std::numeric_limits<uint64>::lowest()};
   } else if (dt->is_primitive(PrimitiveTypeID::f32)) {
-    return {dt, std::numeric_limits<float32>::min()};
+    return {dt, std::numeric_limits<float32>::lowest()};
   } else if (dt->is_primitive(PrimitiveTypeID::f64)) {
-    return {dt, std::numeric_limits<float64>::min()};
+    return {dt, std::numeric_limits<float64>::lowest()};
   } else {
     TI_NOT_IMPLEMENTED;
   }

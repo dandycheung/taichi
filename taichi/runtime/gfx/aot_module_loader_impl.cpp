@@ -26,35 +26,63 @@ class AotModuleImpl : public aot::Module {
       : module_path_(params.module_path),
         runtime_(params.runtime),
         device_api_backend_(device_api_backend) {
-    const std::string bin_path =
-        fmt::format("{}/metadata.tcb", params.module_path);
-    if (!read_from_binary_file(ti_aot_data_, bin_path)) {
-      mark_corrupted();
-      return;
-    }
+    std::unique_ptr<io::VirtualDir> dir_alt =
+        io::VirtualDir::from_fs_dir(module_path_);
+    const io::VirtualDir *dir =
+        params.dir == nullptr ? dir_alt.get() : params.dir;
 
-    if (!params.enable_lazy_loading) {
-      for (int i = 0; i < ti_aot_data_.kernels.size(); ++i) {
-        auto k = ti_aot_data_.kernels[i];
-        std::vector<std::vector<uint32_t>> spirv_sources_codes;
-        for (int j = 0; j < k.tasks_attribs.size(); ++j) {
-          std::vector<uint32_t> res =
-              read_spv_file(params.module_path, k.tasks_attribs[j]);
-          if (res.size() == 0) {
-            mark_corrupted();
-            return;
-          }
-          spirv_sources_codes.push_back(res);
-        }
-        ti_aot_data_.spirv_codes.push_back(spirv_sources_codes);
+    {
+      std::vector<uint8_t> metadata_json{};
+      bool succ = dir->load_file("metadata.json", metadata_json) != 0;
+
+      if (!succ) {
+        mark_corrupted();
+        TI_WARN("'metadata.json' cannot be read");
+        return;
       }
+      auto json = liong::json::parse(
+          (const char *)metadata_json.data(),
+          (const char *)(metadata_json.data() + metadata_json.size()));
+      liong::json::deserialize(json, ti_aot_data_);
     }
 
-    const std::string graph_path =
-        fmt::format("{}/graphs.tcb", params.module_path);
-    if (!read_from_binary_file(graphs_, graph_path)) {
-      mark_corrupted();
-      return;
+    for (int i = 0; i < ti_aot_data_.kernels.size(); ++i) {
+      auto k = ti_aot_data_.kernels[i];
+      std::vector<std::vector<uint32_t>> spirv_sources_codes;
+      for (int j = 0; j < k.tasks_attribs.size(); ++j) {
+        std::string spirv_path = k.tasks_attribs[j].name + ".spv";
+
+        std::vector<uint32_t> spirv;
+        dir->load_file(spirv_path, spirv);
+
+        if (spirv.size() == 0) {
+          mark_corrupted();
+          TI_WARN("spirv '{}' cannot be read", spirv_path);
+          return;
+        }
+        if (spirv.at(0) != 0x07230203) {
+          TI_WARN("spirv '{}' has a incorrect magic number {}", spirv_path,
+                  spirv.at(0));
+        }
+        spirv_sources_codes.emplace_back(std::move(spirv));
+      }
+      ti_aot_data_.spirv_codes.emplace_back(std::move(spirv_sources_codes));
+    }
+
+    {
+      std::vector<uint8_t> graphs_json{};
+      bool succ = dir->load_file("graphs.json", graphs_json) != 0;
+
+      if (!succ) {
+        mark_corrupted();
+        TI_WARN("'graphs.json' cannot be read");
+        return;
+      }
+
+      auto json = liong::json::parse(
+          (const char *)graphs_json.data(),
+          (const char *)(graphs_json.data() + graphs_json.size()));
+      liong::json::deserialize(json, graphs_);
     }
   }
 
@@ -102,13 +130,7 @@ class AotModuleImpl : public aot::Module {
   bool get_kernel_params_by_name(const std::string &name,
                                  GfxRuntime::RegisterParams &kernel) {
     for (int i = 0; i < ti_aot_data_.kernels.size(); ++i) {
-      // Offloaded task names encode more than the name of the function, but for
-      // AOT, only use the name of the function which should be the first part
-      // of the struct
-      if (ti_aot_data_.kernels[i].name.rfind(name, 0) == 0) {
-        if (!try_load_spv_kernel(i)) {
-          return false;
-        }
+      if (ti_aot_data_.kernels[i].name == name) {
         kernel.kernel_attribs = ti_aot_data_.kernels[i];
         kernel.task_spirv_source_codes = ti_aot_data_.spirv_codes[i];
         // We don't have to store the number of SNodeTree in |ti_aot_data_| yet,
@@ -144,24 +166,6 @@ class AotModuleImpl : public aot::Module {
       return nullptr;
     }
     return std::make_unique<FieldImpl>(runtime_, field);
-  }
-
-  bool try_load_spv_kernel(std::size_t index) {
-    if (index >= ti_aot_data_.spirv_codes.size() ||
-        ti_aot_data_.spirv_codes[index].empty()) {
-      ti_aot_data_.spirv_codes.resize(index + 1);
-      auto &codes = ti_aot_data_.spirv_codes[index];
-      const auto &k = ti_aot_data_.kernels[index];
-      for (const auto &t : k.tasks_attribs) {
-        auto spv = read_spv_file(module_path_, t);
-        if (spv.empty()) {
-          mark_corrupted();
-          return false;
-        }
-        codes.push_back(spv);
-      }
-    }
-    return true;
   }
 
   static std::vector<uint32_t> read_spv_file(const std::string &output_dir,

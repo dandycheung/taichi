@@ -38,8 +38,8 @@ static std::string get_llvm_cache_metadata_json_file_path(
 static std::vector<std::string> get_possible_llvm_cache_filename_by_key(
     const std::string &key) {
   return {
-      key + ".ll",
-      key + ".bc",
+      key + "." + offline_cache::kLlvmCacheFilenameLLExt,
+      key + "." + offline_cache::kLlvmCacheFilenameBCExt,
   };
 }
 
@@ -90,7 +90,7 @@ struct CacheCleanerUtils<LlvmOfflineCache> {
   static bool is_valid_cache_file(const CacheCleanerConfig &config,
                                   const std::string &name) {
     std::string ext = filename_extension(name);
-    return ext == "ll" || ext == "bc";
+    return ext == kLlvmCacheFilenameLLExt || ext == kLlvmCacheFilenameBCExt;
   }
 };
 
@@ -130,12 +130,16 @@ bool LlvmOfflineCacheFileReader::load_meta_data(
   if (lock_with_file(lock_path)) {
     auto _ = make_cleanup([&lock_path]() {
       if (!unlock_with_file(lock_path)) {
-        TI_WARN("Unlock {} failed", lock_path);
+        TI_WARN(
+            "Unlock {} failed. You can remove this .lock file manually and try "
+            "again.",
+            lock_path);
       }
     });
     return Error::kNoError == load_metadata_with_checking(data, tcb_path);
   }
-  TI_WARN("Lock {} failed", lock_path);
+  TI_WARN("Lock {} failed. You can run 'ti cache clean -p {}' and try again.",
+          lock_path, cache_file_path);
   return false;
 }
 
@@ -185,14 +189,8 @@ bool LlvmOfflineCacheFileReader::get_kernel_cache(
       return false;  // Must return
     }
   }
-  res.compiled_data = data.clone();
-
   kernel_data.last_used_at = std::time(nullptr);
-
-  res.created_at = kernel_data.created_at;
-  res.last_used_at = kernel_data.last_used_at;
-  res.kernel_key = key;
-  res.args = kernel_data.args;
+  res = kernel_data.clone();
 
   // Verify the `res: LlvmOfflineCache::KernelCacheData`
   const auto &compiled_data = res.compiled_data;
@@ -219,12 +217,15 @@ std::unique_ptr<llvm::Module> LlvmOfflineCacheFileReader::load_module(
   TI_AUTO_PROF;
   if (format_ & Format::BC) {
     LlvmModuleBitcodeLoader loader;
-    return loader.set_bitcode_path(path_prefix + ".bc")
+    return loader
+        .set_bitcode_path(path_prefix + "." +
+                          offline_cache::kLlvmCacheFilenameBCExt)
         .set_buffer_id(key)
         .set_inline_funcs(false)
         .load(&llvm_ctx);
   } else if (format_ & Format::LL) {
-    const std::string filename = path_prefix + ".ll";
+    const std::string filename =
+        path_prefix + "." + offline_cache::kLlvmCacheFilenameLLExt;
     llvm::SMDiagnostic err;
     auto ret = llvm::parseAssemblyFile(filename, err, llvm_ctx);
     if (!ret) {  // File not found or Parse failed
@@ -233,7 +234,7 @@ std::unique_ptr<llvm::Module> LlvmOfflineCacheFileReader::load_module(
     }
     return ret;
   }
-  TI_ERROR("Unknown LLVM format={}", format_);
+  TI_ERROR("Unknown LLVM format={}", int(format_));
   return nullptr;
 }
 
@@ -265,8 +266,9 @@ void LlvmOfflineCacheFileWriter::dump(const std::string &path,
       auto *mod = data.module.get();
       TI_ASSERT(mod != nullptr);
       if (format & Format::LL) {
-        std::string filename = filename_prefix + ".ll";
-        if (try_lock_with_file(filename)) {  // Not exists
+        std::string filename =
+            filename_prefix + "." + offline_cache::kLlvmCacheFilenameLLExt;
+        if (!merge_with_old || try_lock_with_file(filename)) {
           size += write_llvm_module(filename, [mod](llvm::raw_os_ostream &os) {
             mod->print(os, /*AAW=*/nullptr);
           });
@@ -275,8 +277,9 @@ void LlvmOfflineCacheFileWriter::dump(const std::string &path,
         }
       }
       if (format & Format::BC) {
-        std::string filename = filename_prefix + ".bc";
-        if (try_lock_with_file(filename)) {  // Not exists
+        std::string filename =
+            filename_prefix + "." + offline_cache::kLlvmCacheFilenameBCExt;
+        if (!merge_with_old || try_lock_with_file(filename)) {
           size += write_llvm_module(filename, [mod](llvm::raw_os_ostream &os) {
             llvm::WriteBitcodeToFile(*mod, os);
           });
@@ -313,12 +316,17 @@ void LlvmOfflineCacheFileWriter::dump(const std::string &path,
     // metadata file format to reduce overhead.
     std::string lock_path = taichi::join_path(path, kMetadataFileLockName);
     if (!lock_with_file(lock_path)) {
-      TI_WARN("Lock {} failed", lock_path);
+      TI_WARN(
+          "Lock {} failed. You can run 'ti cache clean -p {}' and try again.",
+          lock_path, path);
       return;
     }
     auto _ = make_cleanup([&lock_path]() {
       if (!unlock_with_file(lock_path)) {
-        TI_WARN("Unlock {} failed", lock_path);
+        TI_WARN(
+            "Unlock {} failed. You can remove this .lock file manually and try "
+            "again.",
+            lock_path);
       }
     });
 
@@ -397,6 +405,32 @@ void LlvmOfflineCacheFileWriter::clean_cache(const std::string &path,
 
 LlvmOfflineCache::KernelCacheData LlvmOfflineCache::KernelCacheData::clone()
     const {
-  return {kernel_key, args, compiled_data.clone()};
+  LlvmOfflineCache::KernelCacheData result;
+  result.kernel_key = kernel_key;
+  result.args = args;
+  result.rets = rets;
+  result.compiled_data = compiled_data.clone();
+  result.size = size;
+  result.created_at = created_at;
+  result.last_used_at = last_used_at;
+  result.ret_size = ret_size;
+  result.ret_type = ret_type;
+  result.args_size = args_size;
+  result.args_type = args_type;
+  return result;
 }
+
+LLVM::CompiledKernelData::InternalData
+LlvmOfflineCache::KernelCacheData::convert_to_llvm_ckd_data() const {
+  LLVM::CompiledKernelData::InternalData result;
+  result.args = args;
+  result.rets = rets;
+  result.compiled_data = compiled_data.clone();
+  result.ret_size = ret_size;
+  result.ret_type = ret_type;
+  result.args_size = args_size;
+  result.args_type = args_type;
+  return result;
+}
+
 }  // namespace taichi::lang

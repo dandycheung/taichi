@@ -31,19 +31,17 @@ class TaichiLLVMContext {
     llvm::LLVMContext *llvm_context{nullptr};
     std::unique_ptr<llvm::Module> runtime_module{nullptr};
     std::unordered_map<int, std::unique_ptr<llvm::Module>> struct_modules;
-    ThreadLocalData(std::unique_ptr<llvm::orc::ThreadSafeContext> ctx);
+    explicit ThreadLocalData(std::unique_ptr<llvm::orc::ThreadSafeContext> ctx);
     ~ThreadLocalData();
   };
-  CompileConfig *config_;
+  const CompileConfig &config_;
 
  public:
-  std::unique_ptr<JITSession> jit{nullptr};
   // main_thread is defined to be the thread that runs the initializer
-  JITModule *runtime_jit_module{nullptr};
 
   std::unique_ptr<ThreadLocalData> linking_context_data{nullptr};
 
-  TaichiLLVMContext(CompileConfig *config, Arch arch);
+  TaichiLLVMContext(const CompileConfig &config, Arch arch);
 
   virtual ~TaichiLLVMContext();
 
@@ -52,20 +50,13 @@ class TaichiLLVMContext {
   llvm::orc::ThreadSafeContext *get_this_thread_thread_safe_context();
 
   /**
-   * Initializes TaichiLLVMContext#runtime_jit_module.
-   *
-   * Unfortunately, this cannot be placed inside the constructor. When adding an
-   * llvm::Module, the JITSessionCPU implementation eventually calls back to
-   * this object, so it must be fully constructed by then.
-   */
-  void init_runtime_jit_module();
-
-  /**
    * Updates the LLVM module of the JIT compiled SNode structs.
    *
    * @param module Module containing the JIT compiled SNode structs.
    */
   void add_struct_module(std::unique_ptr<llvm::Module> module, int tree_id);
+
+  void init_runtime_module(llvm::Module *runtime_module);
 
   /**
    * Clones the LLVM module compiled from llvm/runtime.cpp
@@ -75,22 +66,6 @@ class TaichiLLVMContext {
   std::unique_ptr<llvm::Module> clone_runtime_module();
 
   std::unique_ptr<llvm::Module> module_from_file(const std::string &file);
-
-  JITModule *create_jit_module(std::unique_ptr<llvm::Module> module);
-
-  virtual void *lookup_function_pointer(const std::string &name) {
-    return jit->lookup(name);
-  }
-
-  // Unfortunately, this can't be virtual since it's a template function
-  template <typename T>
-  std::function<T> lookup_function(const std::string &name) {
-    using FuncT = typename std::function<T>;
-    auto ret =
-        FuncT((function_pointer_type<FuncT>)lookup_function_pointer(name));
-    TI_ASSERT(ret != nullptr);
-    return ret;
-  }
 
   llvm::Type *get_data_type(DataType dt);
 
@@ -103,6 +78,10 @@ class TaichiLLVMContext {
 
   std::size_t get_struct_element_offset(llvm::StructType *type, int idx);
 
+  std::pair<const StructType *, size_t> get_struct_type_with_data_layout(
+      const StructType *old_ty,
+      const std::string &layout);
+
   template <typename T>
   llvm::Value *get_constant(T t);
 
@@ -110,6 +89,8 @@ class TaichiLLVMContext {
   llvm::Value *get_constant(DataType dt, T t);
 
   llvm::DataLayout get_data_layout();
+
+  std::string get_data_layout_string();
 
   std::string type_name(llvm::Type *type);
 
@@ -124,6 +105,8 @@ class TaichiLLVMContext {
       std::function<bool(const std::string &)> export_indicator);
 
   void mark_function_as_cuda_kernel(llvm::Function *func, int block_dim = 0);
+
+  void mark_function_as_amdgpu_kernel(llvm::Function *func);
 
   void fetch_this_thread_struct_module();
   llvm::Module *get_this_thread_runtime_module();
@@ -144,12 +127,19 @@ class TaichiLLVMContext {
   LLVMCompiledKernel link_compiled_tasks(
       std::vector<std::unique_ptr<LLVMCompiledTask>> data_list);
 
+  static llvm::DataLayout get_data_layout(Arch arch);
+
  private:
   std::unique_ptr<llvm::Module> clone_module_to_context(
       llvm::Module *module,
       llvm::LLVMContext *target_context);
 
+  void link_module_with_custom_cuda_library(
+      std::unique_ptr<llvm::Module> &module);
+
   void link_module_with_cuda_libdevice(std::unique_ptr<llvm::Module> &module);
+
+  void link_module_with_amdgpu_libdevice(std::unique_ptr<llvm::Module> &module);
 
   static int num_instructions(llvm::Function *func);
 
@@ -160,13 +150,11 @@ class TaichiLLVMContext {
 
   ThreadLocalData *get_this_thread_data();
 
-  void update_runtime_jit_module(std::unique_ptr<llvm::Module> module);
-
   std::unordered_map<std::thread::id, std::unique_ptr<ThreadLocalData>>
       per_thread_data_;
 
   Arch arch_;
-
+  llvm::DataLayout data_layout_{""};
   std::thread::id main_thread_id_;
   ThreadLocalData *main_thread_data_{nullptr};
   std::mutex mut_;

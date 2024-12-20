@@ -4,7 +4,6 @@
 #include "taichi/program/program.h"
 #include "taichi/ir/ir.h"
 #include "taichi/ir/statements.h"
-#include "taichi/util/statistics.h"
 #include "taichi/util/file_sequence_writer.h"
 #include "taichi/runtime/llvm/llvm_context.h"
 
@@ -66,7 +65,7 @@ GlobalVariable *createGlobalVariableForResource(Module &M,
 }
 
 std::vector<uint8_t> global_optimize_module(llvm::Module *module,
-                                            CompileConfig &config) {
+                                            const CompileConfig &config) {
   TI_AUTO_PROF
   if (llvm::verifyModule(*module, &llvm::errs())) {
     module->print(llvm::errs(), nullptr);

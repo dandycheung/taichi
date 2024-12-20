@@ -12,9 +12,7 @@
 #include "taichi/struct/snode_tree.h"
 #include "taichi/program/compile_config.h"
 
-#include "taichi/runtime/runtime.h"
 #include "taichi/system/threading.h"
-#include "taichi/system/memory_pool.h"
 
 #define TI_RUNTIME_HOST
 #include "taichi/program/context.h"
@@ -26,6 +24,10 @@ namespace cuda {
 class CudaDevice;
 }  // namespace cuda
 
+namespace amdgpu {
+class AmdgpuDevice;
+}  // namespace amdgpu
+
 namespace cpu {
 class CpuDevice;
 }  // namespace cpu
@@ -33,12 +35,11 @@ class CpuDevice;
 class LlvmRuntimeExecutor {
  public:
   LlvmRuntimeExecutor(CompileConfig &config, KernelProfilerBase *profiler);
-
+  virtual ~LlvmRuntimeExecutor();
   /**
    * Initializes the runtime system for LLVM based backends.
    */
-  void materialize_runtime(MemoryPool *memory_pool,
-                           KernelProfilerBase *profiler,
+  void materialize_runtime(KernelProfilerBase *profiler,
                            uint64 **result_buffer_ptr);
 
   // SNodeTree Allocation
@@ -46,29 +47,37 @@ class LlvmRuntimeExecutor {
       const LlvmOfflineCache::FieldCacheData &field_cache_data,
       uint64 *result_buffer);
 
-  // Ndarray Allocation
-  DeviceAllocation allocate_memory_ndarray(std::size_t alloc_size,
-                                           uint64 *result_buffer);
+  // Ndarray and ArgPack Allocation
+  DeviceAllocation allocate_memory_on_device(std::size_t alloc_size,
+                                             uint64 *result_buffer);
+
+  void deallocate_memory_on_device(DeviceAllocation handle);
 
   void check_runtime_error(uint64 *result_buffer);
 
-  uint64_t *get_ndarray_alloc_info_ptr(const DeviceAllocation &alloc);
+  uint64_t *get_device_alloc_info_ptr(const DeviceAllocation &alloc);
 
-  CompileConfig *get_config() {
+  const CompileConfig &get_config() const {
     return config_;
   }
 
-  TaichiLLVMContext *get_llvm_context(Arch arch);
+  TaichiLLVMContext *get_llvm_context();
+
+  JITModule *create_jit_module(std::unique_ptr<llvm::Module> module);
+
+  JITModule *get_runtime_jit_module();
 
   LLVMRuntime *get_llvm_runtime();
-
-  void prepare_runtime_context(RuntimeContext *ctx);
 
   Device *get_compute_device();
 
   LlvmDevice *llvm_device();
 
   void synchronize();
+
+  bool use_device_memory_pool() {
+    return use_device_memory_pool_;
+  }
 
  private:
   /* ----------------------- */
@@ -80,11 +89,20 @@ class LlvmRuntimeExecutor {
         fetch_result_uint64(i, result_buffer));
   }
 
+  template <typename T>
+  T fetch_result(char *result_buffer, int offset) {
+    return *(T *)(result_buffer + offset);
+  }
+
   DevicePtr get_snode_tree_device_ptr(int tree_id);
 
   void fill_ndarray(const DeviceAllocation &alloc,
                     std::size_t size,
                     uint32_t data);
+
+  void *preallocate_memory(std::size_t prealloc_size,
+                           DeviceAllocationUnique &devalloc);
+  void preallocate_runtime_memory();
 
   /* ------------------------- */
   /* ---- Runtime Helpers ---- */
@@ -98,16 +116,9 @@ class LlvmRuntimeExecutor {
   T runtime_query(const std::string &key,
                   uint64 *result_buffer,
                   Args &&...args) {
-    TI_ASSERT(arch_uses_llvm(config_->arch));
+    TI_ASSERT(arch_uses_llvm(config_.arch));
 
-    TaichiLLVMContext *tlctx = nullptr;
-    if (llvm_context_device_) {
-      tlctx = llvm_context_device_.get();
-    } else {
-      tlctx = llvm_context_host_.get();
-    }
-
-    auto runtime = tlctx->runtime_jit_module;
+    auto runtime = get_runtime_jit_module();
     runtime->call<void *>("runtime_" + key, llvm_runtime_,
                           std::forward<Args>(args)...);
     return taichi_union_cast_with_different_sizes<T>(fetch_result_uint64(
@@ -117,18 +128,6 @@ class LlvmRuntimeExecutor {
   /* -------------------------- */
   /* ------ Member Access ----- */
   /* -------------------------- */
-  cuda::CudaDevice *cuda_device();
-  cpu::CpuDevice *cpu_device();
-
-  void initialize_host();
-
-  /**
-   * Initializes Program#llvm_context_device, if this has not been done.
-   *
-   * Not thread safe.
-   */
-  void maybe_initialize_cuda_llvm_context();
-
   void finalize();
 
   uint64 fetch_result_uint64(int i, uint64 *result_buffer);
@@ -136,16 +135,14 @@ class LlvmRuntimeExecutor {
   std::size_t get_snode_num_dynamically_allocated(SNode *snode,
                                                   uint64 *result_buffer);
 
- private:
-  CompileConfig *config_;
-  std::unique_ptr<Runtime> runtime_mem_info_{nullptr};
+  void init_runtime_jit_module(std::unique_ptr<llvm::Module> module);
 
-  // TODO(zhanlue): compile - runtime split for TaichiLLVMContext
-  //
-  // TaichiLLVMContext is a thread-safe class with llvm::Module for compilation
-  // and JITSession/JITModule for runtime loading & execution
-  std::unique_ptr<TaichiLLVMContext> llvm_context_host_{nullptr};
-  std::unique_ptr<TaichiLLVMContext> llvm_context_device_{nullptr};
+ private:
+  CompileConfig &config_;
+
+  std::unique_ptr<TaichiLLVMContext> llvm_context_{nullptr};
+  std::unique_ptr<JITSession> jit_session_{nullptr};
+  JITModule *runtime_jit_module_{nullptr};
   void *llvm_runtime_{nullptr};
 
   std::unique_ptr<ThreadPool> thread_pool_{nullptr};
@@ -153,12 +150,18 @@ class LlvmRuntimeExecutor {
 
   std::unique_ptr<SNodeTreeBufferManager> snode_tree_buffer_manager_{nullptr};
   std::unordered_map<int, DeviceAllocation> snode_tree_allocs_;
-  void *preallocated_device_buffer_{nullptr};  // TODO: move to memory allocator
-  DeviceAllocation preallocated_device_buffer_alloc_{kDeviceNullAllocation};
+  DeviceAllocationUnique preallocated_runtime_objects_allocs_ = nullptr;
+  DeviceAllocationUnique preallocated_runtime_memory_allocs_ = nullptr;
+  std::unordered_map<DeviceAllocationId, DeviceAllocation>
+      allocated_runtime_memory_allocs_;
 
   // good buddy
   friend LlvmProgramImpl;
   friend SNodeTreeBufferManager;
+
+  bool use_device_memory_pool_ = false;
+  bool finalized_{false};
+  KernelProfilerBase *profiler_ = nullptr;
 };
 
 }  // namespace taichi::lang

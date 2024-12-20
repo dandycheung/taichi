@@ -6,7 +6,6 @@
 
 #include "taichi/common/core.h"
 #include "taichi/util/io.h"
-#include "taichi/util/statistics.h"
 #include "taichi/ir/ir.h"
 #include "taichi/ir/statements.h"
 #include "taichi/program/program.h"
@@ -14,10 +13,10 @@
 #include "taichi/rhi/cuda/cuda_driver.h"
 #include "taichi/rhi/cuda/cuda_context.h"
 #include "taichi/runtime/program_impls/llvm/llvm_program.h"
-#include "taichi/util/action_recorder.h"
 #include "taichi/analysis/offline_cache_util.h"
 #include "taichi/ir/analysis.h"
 #include "taichi/ir/transforms.h"
+#include "taichi/codegen/codegen_utils.h"
 
 namespace taichi::lang {
 
@@ -26,12 +25,27 @@ using namespace llvm;
 // NVVM IR Spec:
 // https://docs.nvidia.com/cuda/archive/10.0/pdf/NVVM_IR_Specification.pdf
 
+static bool is_half2(DataType dt) {
+  if (dt->is<TensorType>()) {
+    auto tensor_type = dt->as<TensorType>();
+    return tensor_type->get_element_type() == PrimitiveType::f16 &&
+           tensor_type->get_num_elements() == 2;
+  }
+
+  return false;
+}
+
 class TaskCodeGenCUDA : public TaskCodeGenLLVM {
  public:
   using IRVisitor::visit;
+  size_t dynamic_shared_array_bytes{0};
 
-  TaskCodeGenCUDA(Kernel *kernel, IRNode *ir = nullptr)
-      : TaskCodeGenLLVM(kernel, ir) {
+  explicit TaskCodeGenCUDA(int id,
+                           const CompileConfig &config,
+                           TaichiLLVMContext &tlctx,
+                           const Kernel *kernel,
+                           IRNode *ir = nullptr)
+      : TaskCodeGenLLVM(id, config, tlctx, kernel, ir) {
   }
 
   llvm::Value *create_print(std::string tag,
@@ -53,10 +67,7 @@ class TaskCodeGenCUDA : public TaskCodeGenLLVM {
     auto value_arr = builder->CreateAlloca(stype);
     for (int i = 0; i < values.size(); i++) {
       auto value_ptr = builder->CreateGEP(
-#ifdef TI_LLVM_15
-          stype,
-#endif
-          value_arr, {tlctx->get_constant(0), tlctx->get_constant(i)});
+          stype, value_arr, {tlctx->get_constant(0), tlctx->get_constant(i)});
       builder->CreateStore(values[i], value_ptr);
     }
     return LLVMModuleBuilder::call(
@@ -83,6 +94,10 @@ class TaskCodeGenCUDA : public TaskCodeGenLLVM {
       value_type = tlctx->get_data_type(PrimitiveType::u16);
       value = builder->CreateZExt(value, value_type);
     }
+    if (dt->is_primitive(PrimitiveTypeID::u1)) {
+      value_type = tlctx->get_data_type(PrimitiveType::i32);
+      value = builder->CreateZExt(value, value_type);
+    }
     return std::make_tuple(value, value_type);
   }
 
@@ -95,19 +110,35 @@ class TaskCodeGenCUDA : public TaskCodeGenLLVM {
 
     std::string formats;
     size_t num_contents = 0;
-    for (auto const &content : stmt->contents) {
+    for (auto i = 0; i < stmt->contents.size(); ++i) {
+      auto const &content = stmt->contents[i];
+      auto const &format = stmt->formats[i];
+
       if (std::holds_alternative<Stmt *>(content)) {
         auto arg_stmt = std::get<Stmt *>(content);
 
-        formats += data_type_format(arg_stmt->ret_type);
+        auto &&merged_format = merge_printf_specifier(
+            format, data_type_format(arg_stmt->ret_type));
+        // CUDA supports all conversions, but not 'F'.
+        // https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#format-specifiers
+        std::replace(merged_format.begin(), merged_format.end(), 'F', 'f');
+        formats += merged_format;
 
         auto value = llvm_val[arg_stmt];
+        auto value_type = value->getType();
         if (arg_stmt->ret_type->is<TensorType>()) {
           auto dtype = arg_stmt->ret_type->cast<TensorType>();
           num_contents += dtype->get_num_elements();
           auto elem_type = dtype->get_element_type();
           for (int i = 0; i < dtype->get_num_elements(); ++i) {
-            auto elem_value = builder->CreateExtractElement(value, i);
+            llvm::Value *elem_value;
+            if (codegen_vector_type(compile_config)) {
+              TI_ASSERT(llvm::dyn_cast<llvm::VectorType>(value_type));
+              elem_value = builder->CreateExtractElement(value, i);
+            } else {
+              TI_ASSERT(llvm::dyn_cast<llvm::ArrayType>(value_type));
+              elem_value = builder->CreateExtractValue(value, i);
+            }
             auto [casted_value, elem_value_type] =
                 create_value_and_type(elem_value, elem_type);
             types.push_back(elem_value_type);
@@ -137,6 +168,44 @@ class TaskCodeGenCUDA : public TaskCodeGenLLVM {
     }
 
     llvm_val[stmt] = create_print(formats, types, values);
+  }
+
+  void visit(AllocaStmt *stmt) override {
+    // Override shared memory codegen logic for large shared memory
+    auto tensor_type = stmt->ret_type.ptr_removed()->cast<TensorType>();
+    if (tensor_type && stmt->is_shared) {
+      size_t shared_array_bytes =
+          tensor_type->get_num_elements() *
+          data_type_size(tensor_type->get_element_type());
+      if (shared_array_bytes > cuda_dynamic_shared_array_threshold_bytes) {
+        if (dynamic_shared_array_bytes > 0) {
+          /* Current version only allows one dynamic shared array allocation,
+           * otherwise the results could be wrong.
+           * However, we should be able to collect multiple user allocations
+           * and transparently apply a proper offset.
+           *
+           * TODO: remove the limits.
+           */
+          TI_ERROR(
+              "Only one single large shared array instance is allowed in "
+              "current version.")
+        }
+        // Clear tensor shape for dynamic shared memory.
+        tensor_type->set_shape(std::vector<int>({0}));
+        dynamic_shared_array_bytes += shared_array_bytes;
+      }
+
+      auto type = tlctx->get_data_type(tensor_type);
+      auto base = new llvm::GlobalVariable(
+          *module, type, false, llvm::GlobalValue::ExternalLinkage, nullptr,
+          fmt::format("shared_array_{}", stmt->id), nullptr,
+          llvm::GlobalVariable::NotThreadLocal, 3 /*addrspace=shared*/);
+      base->setAlignment(llvm::MaybeAlign(8));
+      auto ptr_type = llvm::PointerType::get(type, 0);
+      llvm_val[stmt] = builder->CreatePointerCast(base, ptr_type);
+    } else {
+      TaskCodeGenLLVM::visit(stmt);
+    }
   }
 
   void emit_extra_unary(UnaryOpStmt *stmt) override {
@@ -185,22 +254,93 @@ class TaskCodeGenCUDA : public TaskCodeGenLLVM {
       } else {
         TI_NOT_IMPLEMENTED
       }
-    } else if (op == UnaryOpType::logic_not) {
-      if (input_taichi_type->is_primitive(PrimitiveTypeID::i32)) {
-        llvm_val[stmt] = call("logic_not_i32", input);
+    } else if (op == UnaryOpType::frexp) {
+      auto stype = tlctx->get_data_type(stmt->ret_type.ptr_removed());
+      auto res = builder->CreateAlloca(stype);
+      auto frac_ptr = builder->CreateStructGEP(stype, res, 0);
+      auto exp_ptr = builder->CreateStructGEP(stype, res, 1);
+      // __nv_frexp onlys takes in double
+      auto double_input =
+          input_taichi_type->is_primitive(PrimitiveTypeID::f32)
+              ? builder->CreateFPExt(
+                    input,
+                    llvm::Type::getDoubleTy(*tlctx->get_this_thread_context()))
+              : input;
+      auto frac = call("__nv_frexp", double_input, exp_ptr);
+      auto output =
+          input_taichi_type->is_primitive(PrimitiveTypeID::f32)
+              ? builder->CreateFPTrunc(
+                    frac,
+                    llvm::Type::getFloatTy(*tlctx->get_this_thread_context()))
+              : frac;
+      builder->CreateStore(output, frac_ptr);
+      llvm_val[stmt] = res;
+    } else if (op == UnaryOpType::popcnt) {
+      if (input_taichi_type->is_primitive(PrimitiveTypeID::u64) ||
+          input_taichi_type->is_primitive(PrimitiveTypeID::i64)) {
+        stmt->ret_type = PrimitiveType::i32;
+        llvm_val[stmt] = call("__nv_popcll", input);
+      } else if (input_taichi_type->is_primitive(PrimitiveTypeID::i32) ||
+                 input_taichi_type->is_primitive(PrimitiveTypeID::u32)) {
+        llvm_val[stmt] = call("__nv_popc", input);
       } else {
         TI_NOT_IMPLEMENTED
       }
+    } else if (op == UnaryOpType::clz) {
+      if (input_taichi_type->is_primitive(PrimitiveTypeID::i32)) {
+        stmt->ret_type = PrimitiveType::i32;
+        llvm_val[stmt] = call("__nv_clz", input);
+      } else if (input_taichi_type->is_primitive(PrimitiveTypeID::i64)) {
+        llvm_val[stmt] = call("__nv_clzll", input);
+      } else {
+        TI_NOT_IMPLEMENTED
+      }
+    } else if (op == UnaryOpType::log) {
+      if (input_taichi_type->is_primitive(PrimitiveTypeID::f32)) {
+        // logf has fast-math option
+        llvm_val[stmt] = call(
+            compile_config.fast_math ? "__nv_fast_logf" : "__nv_logf", input);
+      } else if (input_taichi_type->is_primitive(PrimitiveTypeID::f64)) {
+        llvm_val[stmt] = call("__nv_log", input);
+      } else if (input_taichi_type->is_primitive(PrimitiveTypeID::i32)) {
+        llvm_val[stmt] = call("log", input);
+      } else {
+        TI_ERROR("log() for type {} is not supported",
+                 input_taichi_type.to_string());
+      }
+    } else if (op == UnaryOpType::sin) {
+      if (input_taichi_type->is_primitive(PrimitiveTypeID::f32)) {
+        // sinf has fast-math option
+        llvm_val[stmt] = call(
+            compile_config.fast_math ? "__nv_fast_sinf" : "__nv_sinf", input);
+      } else if (input_taichi_type->is_primitive(PrimitiveTypeID::f64)) {
+        llvm_val[stmt] = call("__nv_sin", input);
+      } else if (input_taichi_type->is_primitive(PrimitiveTypeID::i32)) {
+        llvm_val[stmt] = call("sin", input);
+      } else {
+        TI_ERROR("sin() for type {} is not supported",
+                 input_taichi_type.to_string());
+      }
+    } else if (op == UnaryOpType::cos) {
+      if (input_taichi_type->is_primitive(PrimitiveTypeID::f32)) {
+        // cosf has fast-math option
+        llvm_val[stmt] = call(
+            compile_config.fast_math ? "__nv_fast_cosf" : "__nv_cosf", input);
+      } else if (input_taichi_type->is_primitive(PrimitiveTypeID::f64)) {
+        llvm_val[stmt] = call("__nv_cos", input);
+      } else if (input_taichi_type->is_primitive(PrimitiveTypeID::i32)) {
+        llvm_val[stmt] = call("cos", input);
+      } else {
+        TI_ERROR("cos() for type {} is not supported",
+                 input_taichi_type.to_string());
+      }
     }
     UNARY_STD(exp)
-    UNARY_STD(log)
     UNARY_STD(tan)
     UNARY_STD(tanh)
     UNARY_STD(sgn)
     UNARY_STD(acos)
     UNARY_STD(asin)
-    UNARY_STD(cos)
-    UNARY_STD(sin)
     else {
       TI_P(unary_op_type_name(op));
       TI_NOT_IMPLEMENTED
@@ -251,155 +391,80 @@ class TaskCodeGenCUDA : public TaskCodeGenLLVM {
                 llvm_val[stmt->val]);
   }
 
-  // LLVM15 already support f16 atomic in
-  // https://github.com/llvm/llvm-project/commit/0cb08e448af7167ada767e0526aa44980e72ad08
-  // the review is at https://reviews.llvm.org/D52416
-  // Limit the f16 hack to LLVM10 build.
-#ifndef TI_LLVM_15
-  // A huge hack for supporting f16 atomic add/max/min! Borrowed from
-  // https://github.com/tensorflow/tensorflow/blob/470d58a83470f8ede3beaa584e6992bc71b7baa6/tensorflow/compiler/xla/service/gpu/ir_emitter.cc#L378-L490
-  // The reason is that LLVM10 does not support generating atomicCAS for f16 on
-  // NVPTX backend.
-  //
-  // Implements atomic binary operations using atomic compare-and-swap
-  // (atomicCAS) as follows:
-  //   1. Reads the value from the memory pointed to by output_address and
-  //     records it as old_output.
-  //   2. Uses old_output as one of the source operand to perform the binary
-  //     operation and stores the result in new_output.
-  //   3. Calls atomicCAS which implements compare-and-swap as an atomic
-  //     operation. In particular, atomicCAS reads the value from the memory
-  //     pointed to by output_address, and compares the value with old_output.
-  //     If the two values equal, new_output is written to the same memory
-  //     location and true is returned to indicate that the atomic operation
-  //     succeeds. Otherwise, the new value read from the memory is returned. In
-  //     this case, the new value is copied to old_output, and steps 2. and 3.
-  //     are repeated until atomicCAS succeeds.
-  //
-  // int32 is used for the atomicCAS operation. So atomicCAS reads and writes 32
-  // bit values from the memory, which is larger than the memory size required
-  // by the original atomic binary operation. We mask off the last two bits of
-  // the output_address and use the result as an address to read the 32 bit
-  // values from the memory.
-  //
-  // This can avoid out of bound memory accesses, based on the assumption:
-  // All buffers are 4 byte aligned and have a size of 4N.
-  //
-  // The pseudo code is shown below.
-  //
-  //   cas_new_output_address = alloca(32);
-  //   cas_old_output_address = alloca(32);
-  //   atomic_address = output_address & ((int64)(-4));
-  //   new_output_address = cas_new_output_address + (output_address & 3);
-  //
-  //   *cas_old_output_address = *atomic_address;
-  //   do {
-  //     *cas_new_output_address = *cas_old_output_address;
-  //     *new_output_address = operation(*new_output_address, *source_address);
-  //     (*cas_old_output_address, success) =
-  //       atomicCAS(atomic_address, *cas_old_output_address,
-  //       *cas_new_output_address);
-  //   } while (!success);
-  //
+  void visit(AtomicOpStmt *atomic_stmt) override {
+    auto dest_type = atomic_stmt->dest->ret_type.ptr_removed();
+    auto val_type = atomic_stmt->val->ret_type;
 
-  llvm::Value *atomic_op_using_cas(
-      llvm::Value *output_address,
-      llvm::Value *val,
-      std::function<llvm::Value *(llvm::Value *, llvm::Value *)> op) override {
-    llvm::PointerType *output_address_type =
-        llvm::dyn_cast<llvm::PointerType>(output_address->getType());
-    TI_ASSERT(output_address_type != nullptr);
+    // Half2 atomic_add is supported starting from sm_60
+    //
+    // TODO(zhanlue): Add capability support & validation for CUDA AOT
+    //
+    // For now, the following code may potentially cause trouble for CUDA AOT.
+    // With half2 vectorization enabled, if one compiles the code on GPU with
+    // caps >= 60, then distribute it to runtime machine with GPU caps < 60,
+    // it's likely gonna crash
 
-    // element_type is the data type for the binary operation.
-    llvm::Type *element_type = output_address_type->getPointerElementType();
-    llvm::Type *element_address_type = element_type->getPointerTo();
+    std::string cuda_library_path = get_custom_cuda_library_path();
+    int cap = CUDAContext::get_instance().get_compute_capability();
+    if (is_half2(dest_type) && is_half2(val_type) &&
+        atomic_stmt->op_type == AtomicOpType::add && cap >= 60 &&
+        !cuda_library_path.empty()) {
+      /*
+        Half2 optimization for float16 atomic add
 
-    int atomic_size = 32;
-    llvm::Type *atomic_type = builder->getIntNTy(atomic_size);
-    llvm::Type *atomic_address_type = atomic_type->getPointerTo(
-        output_address_type->getPointerAddressSpace());
+        [CHI IR]
+            TensorType<2 x f16> old_val = atomic_add(TensorType<2 x f16>
+        dest_ptr*, TensorType<2 x f16> val)
 
-    // cas_old_output_address and cas_new_output_address point to the scratch
-    // memory where we store the old and new values for the repeated atomicCAS
-    // operations.
-    llvm::Value *cas_old_output_address =
-        builder->CreateAlloca(atomic_type, nullptr);
-    llvm::Value *cas_new_output_address =
-        builder->CreateAlloca(atomic_type, nullptr);
+        [CodeGen]
+            old_val_ptr = Alloca(TensorType<2 x f16>)
 
-    llvm::Value *atomic_memory_address;
-    // binop_output_address points to the scratch memory that stores the
-    // result of the binary operation.
-    llvm::Value *binop_output_address;
+            val_ptr = Alloca(TensorType<2 x f16>)
+            GEP(val_ptr, 0) = ExtractValue(val, 0)
+            GEP(val_ptr, 1) = ExtractValue(val, 1)
 
-    // Calculate bin_output_address output_address
-    llvm::Type *address_int_type =
-        module->getDataLayout().getIntPtrType(output_address_type);
-    atomic_memory_address =
-        builder->CreatePtrToInt(output_address, address_int_type);
-    llvm::Value *mask = llvm::ConstantInt::get(address_int_type, 3);
-    llvm::Value *offset = builder->CreateAnd(atomic_memory_address, mask);
-    mask = llvm::ConstantInt::get(address_int_type, -4);
-    atomic_memory_address = builder->CreateAnd(atomic_memory_address, mask);
-    atomic_memory_address =
-        builder->CreateIntToPtr(atomic_memory_address, atomic_address_type);
-    binop_output_address = builder->CreateAdd(
-        builder->CreatePtrToInt(cas_new_output_address, address_int_type),
-        offset);
-    binop_output_address =
-        builder->CreateIntToPtr(binop_output_address, element_address_type);
+            half2_atomic_add(dest_ptr, old_val_ptr, val_ptr)
 
-    // Use the value from the memory that atomicCAS operates on to initialize
-    // cas_old_output.
-    llvm::Value *cas_old_output =
-        builder->CreateLoad(atomic_memory_address, "cas_old_output");
-    builder->CreateStore(cas_old_output, cas_old_output_address);
+            old_val = Load(old_val_ptr)
+      */
+      // Allocate old_val_ptr to store the result of atomic_add
+      auto char_type = llvm::Type::getInt8Ty(*tlctx->get_this_thread_context());
+      auto half_type = llvm::Type::getHalfTy(*tlctx->get_this_thread_context());
+      auto ptr_type = llvm::PointerType::get(char_type, 0);
 
-    llvm::BasicBlock *loop_body_bb =
-        BasicBlock::Create(*llvm_context, "atomic_op_loop_body", func);
-    llvm::BasicBlock *loop_exit_bb =
-        BasicBlock::Create(*llvm_context, "loop_exit_bb", func);
-    builder->CreateBr(loop_body_bb);
-    builder->SetInsertPoint(loop_body_bb);
+      llvm::Value *old_val = builder->CreateAlloca(half_type);
+      llvm::Value *old_val_ptr = builder->CreateBitCast(old_val, ptr_type);
 
-    // loop body for one atomicCAS
-    {
-      // Use cas_old_output to initialize cas_new_output.
-      cas_old_output =
-          builder->CreateLoad(cas_old_output_address, "cas_old_output");
-      builder->CreateStore(cas_old_output, cas_new_output_address);
+      // Prepare dest_ptr via pointer cast
+      llvm::Value *dest_half2_ptr =
+          builder->CreateBitCast(llvm_val[atomic_stmt->dest], ptr_type);
 
-      auto binop_output = op(builder->CreateLoad(binop_output_address), val);
-      builder->CreateStore(binop_output, binop_output_address);
+      // Prepare value_ptr from val
+      llvm::ArrayType *array_type = llvm::ArrayType::get(half_type, 2);
+      llvm::Value *value_ptr = builder->CreateAlloca(array_type);
+      llvm::Value *value_ptr0 =
+          builder->CreateGEP(array_type, value_ptr,
+                             {tlctx->get_constant(0), tlctx->get_constant(0)});
+      llvm::Value *value_ptr1 =
+          builder->CreateGEP(array_type, value_ptr,
+                             {tlctx->get_constant(0), tlctx->get_constant(1)});
+      llvm::Value *value0 =
+          builder->CreateExtractValue(llvm_val[atomic_stmt->val], {0});
+      llvm::Value *value1 =
+          builder->CreateExtractValue(llvm_val[atomic_stmt->val], {1});
+      builder->CreateStore(value0, value_ptr0);
+      builder->CreateStore(value1, value_ptr1);
+      llvm::Value *value_half2_ptr =
+          builder->CreateBitCast(value_ptr, ptr_type);
+      // Defined in taichi/runtime/llvm/runtime_module/cuda_runtime.cu
+      call("half2_atomic_add", dest_half2_ptr, old_val_ptr, value_half2_ptr);
 
-      llvm::Value *cas_new_output =
-          builder->CreateLoad(cas_new_output_address, "cas_new_output");
-
-      // Emit code to perform the atomicCAS operation
-      // (cas_old_output, success) = atomicCAS(memory_address, cas_old_output,
-      //                                       cas_new_output);
-      llvm::Value *ret_value = builder->CreateAtomicCmpXchg(
-          atomic_memory_address, cas_old_output, cas_new_output,
-          llvm::AtomicOrdering::SequentiallyConsistent,
-          llvm::AtomicOrdering::SequentiallyConsistent);
-
-      // Extract the memory value returned from atomicCAS and store it as
-      // cas_old_output.
-      builder->CreateStore(
-          builder->CreateExtractValue(ret_value, 0, "cas_old_output"),
-          cas_old_output_address);
-      // Extract the success bit returned from atomicCAS and generate a
-      // conditional branch on the success bit.
-      builder->CreateCondBr(
-          builder->CreateExtractValue(ret_value, 1, "success"), loop_exit_bb,
-          loop_body_bb);
+      llvm_val[atomic_stmt] = builder->CreateLoad(half_type, old_val);
+      return;
     }
 
-    builder->SetInsertPoint(loop_exit_bb);
-
-    return output_address;
+    TaskCodeGenLLVM::visit(atomic_stmt);
   }
-#endif
 
   void visit(RangeForStmt *for_stmt) override {
     create_naive_range_for(for_stmt);
@@ -467,11 +532,7 @@ class TaskCodeGenCUDA : public TaskCodeGenLLVM {
         builder->SetInsertPoint(loop_test_bb);
         auto cond = builder->CreateICmp(
             llvm::CmpInst::Predicate::ICMP_SLT,
-            builder->CreateLoad(
-#ifdef TI_LLVM_15
-                i32_ty,
-#endif
-                loop_index),
+            builder->CreateLoad(i32_ty, loop_index),
             llvm_val[stmt->owned_num_local.find(stmt->major_from_type)
                          ->second]);
         builder->CreateCondBr(cond, loop_body_bb, func_exit);
@@ -484,13 +545,10 @@ class TaskCodeGenCUDA : public TaskCodeGenLLVM {
           auto &s = stmt->body->statements[i];
           s->accept(this);
         }
-        builder->CreateStore(builder->CreateAdd(builder->CreateLoad(
-#ifdef TI_LLVM_15
-                                                    i32_ty,
-#endif
-                                                    loop_index),
-                                                block_dim),
-                             loop_index);
+        builder->CreateStore(
+            builder->CreateAdd(builder->CreateLoad(i32_ty, loop_index),
+                               block_dim),
+            loop_index);
         builder->CreateBr(loop_test_bb);
         builder->SetInsertPoint(func_exit);
       }
@@ -516,7 +574,7 @@ class TaskCodeGenCUDA : public TaskCodeGenLLVM {
       init_offloaded_task_function(stmt, "gather_list");
       call("gc_parallel_0", get_context(), snode_id);
       finalize_offloaded_task_function();
-      current_task->grid_dim = prog->this_thread_config().saturating_grid_dim;
+      current_task->grid_dim = compile_config.saturating_grid_dim;
       current_task->block_dim = 64;
       offloaded_tasks.push_back(*current_task);
       current_task = nullptr;
@@ -534,7 +592,7 @@ class TaskCodeGenCUDA : public TaskCodeGenLLVM {
       init_offloaded_task_function(stmt, "zero_fill");
       call("gc_parallel_2", get_context(), snode_id);
       finalize_offloaded_task_function();
-      current_task->grid_dim = prog->this_thread_config().saturating_grid_dim;
+      current_task->grid_dim = compile_config.saturating_grid_dim;
       current_task->block_dim = 64;
       offloaded_tasks.push_back(*current_task);
       current_task = nullptr;
@@ -550,6 +608,17 @@ class TaskCodeGenCUDA : public TaskCodeGenLLVM {
     // Issue an "__ldg" instruction to cache data in the read-only data cache.
     auto intrin = ty->isFloatingPointTy() ? llvm::Intrinsic::nvvm_ldg_global_f
                                           : llvm::Intrinsic::nvvm_ldg_global_i;
+    // Special treatment for bool types. As nvvm_ldg_global_i does not support
+    // 1-bit integer, so we convert them to i8.
+    if (ty->getScalarSizeInBits() == 1) {
+      auto *new_ty = tlctx->get_data_type<uint8>();
+      auto *new_ptr =
+          builder->CreatePointerCast(ptr, llvm::PointerType::get(new_ty, 0));
+      auto *v = builder->CreateIntrinsic(
+          intrin, {new_ty, llvm::PointerType::get(new_ty, 0)},
+          {new_ptr, tlctx->get_constant(new_ty->getScalarSizeInBits())});
+      return builder->CreateIsNotNull(v);
+    }
     return builder->CreateIntrinsic(
         intrin, {ty, llvm::PointerType::get(ty, 0)},
         {ptr, tlctx->get_constant(ty->getScalarSizeInBits())});
@@ -576,7 +645,6 @@ class TaskCodeGenCUDA : public TaskCodeGenLLVM {
   }
 
   void visit(OffloadedStmt *stmt) override {
-    stat.add("codegen_offloaded_tasks");
     if (stmt->bls_size > 0)
       create_bls_buffer(stmt);
 #if defined(TI_WITH_CUDA)
@@ -593,7 +661,7 @@ class TaskCodeGenCUDA : public TaskCodeGenLLVM {
       } else if (stmt->task_type == Type::range_for) {
         create_offload_range_for(stmt);
       } else if (stmt->task_type == Type::struct_for) {
-        create_offload_struct_for(stmt, true);
+        create_offload_struct_for(stmt);
       } else if (stmt->task_type == Type::mesh_for) {
         create_offload_mesh_for(stmt);
       } else if (stmt->task_type == Type::listgen) {
@@ -624,6 +692,7 @@ class TaskCodeGenCUDA : public TaskCodeGenLLVM {
         current_task->grid_dim = num_SMs * query_max_block_per_sm;
       }
       current_task->block_dim = stmt->block_dim;
+      current_task->dynamic_shared_array_bytes = dynamic_shared_array_bytes;
       TI_ASSERT(current_task->grid_dim != 0);
       TI_ASSERT(current_task->block_dim != 0);
       offloaded_tasks.push_back(*current_task);
@@ -641,14 +710,6 @@ class TaskCodeGenCUDA : public TaskCodeGenLLVM {
     } else {
       TI_NOT_IMPLEMENTED
     }
-  }
-
-  void visit(ExternalTensorShapeAlongAxisStmt *stmt) override {
-    const auto arg_id = stmt->arg_id;
-    const auto axis = stmt->axis;
-    llvm_val[stmt] =
-        call("RuntimeContext_get_extra_args", get_context(),
-             tlctx->get_constant(arg_id), tlctx->get_constant(axis));
   }
 
   void visit(BinaryOpStmt *stmt) override {
@@ -703,140 +764,25 @@ class TaskCodeGenCUDA : public TaskCodeGenLLVM {
           llvm_val[stmt], llvm::Type::getHalfTy(*llvm_context));
     }
   }
+
+ private:
+  std::tuple<llvm::Value *, llvm::Value *> get_spmd_info() override {
+    auto thread_idx =
+        builder->CreateIntrinsic(Intrinsic::nvvm_read_ptx_sreg_tid_x, {}, {});
+    auto block_dim =
+        builder->CreateIntrinsic(Intrinsic::nvvm_read_ptx_sreg_ntid_x, {}, {});
+    return std::make_tuple(thread_idx, block_dim);
+  }
 };
 
-#ifdef TI_WITH_LLVM
-// static
-std::unique_ptr<TaskCodeGenLLVM> KernelCodeGenCUDA::make_codegen_llvm(
-    Kernel *kernel,
-    IRNode *ir) {
-  return std::make_unique<TaskCodeGenCUDA>(kernel, ir);
-}
-#endif  // TI_WITH_LLVM
-
 LLVMCompiledTask KernelCodeGenCUDA::compile_task(
+    int task_codegen_id,
+    const CompileConfig &config,
     std::unique_ptr<llvm::Module> &&module,
-    OffloadedStmt *stmt) {
-  TaskCodeGenCUDA gen(kernel, stmt);
+    IRNode *block) {
+  TaskCodeGenCUDA gen(task_codegen_id, config, get_taichi_llvm_context(),
+                      kernel, block);
   return gen.run_compilation();
-}
-
-FunctionType KernelCodeGenCUDA::compile_to_function() {
-  TI_AUTO_PROF
-  auto *llvm_prog = get_llvm_program(prog);
-  auto *tlctx = llvm_prog->get_llvm_context(kernel->arch);
-
-  CUDAModuleToFunctionConverter converter{tlctx,
-                                          llvm_prog->get_runtime_executor()};
-
-  return converter.convert(this->kernel, compile_kernel_to_module());
-}
-
-FunctionType CUDAModuleToFunctionConverter::convert(
-    const std::string &kernel_name,
-    const std::vector<LlvmLaunchArgInfo> &args,
-    LLVMCompiledKernel data) const {
-  auto &mod = data.module;
-  auto &tasks = data.tasks;
-#ifdef TI_WITH_CUDA
-  for (const auto &task : tasks) {
-    llvm::Function *func = mod->getFunction(task.name);
-    TI_ASSERT(func);
-    tlctx_->mark_function_as_cuda_kernel(func, task.block_dim);
-  }
-
-  auto jit = tlctx_->jit.get();
-  auto cuda_module =
-      jit->add_module(std::move(mod), executor_->get_config()->gpu_max_reg);
-
-  return [cuda_module, kernel_name, args, offloaded_tasks = tasks,
-          executor = this->executor_](RuntimeContext &context) {
-    CUDAContext::get_instance().make_current();
-    std::vector<void *> arg_buffers(args.size(), nullptr);
-    std::vector<void *> device_buffers(args.size(), nullptr);
-
-    bool transferred = false;
-    for (int i = 0; i < (int)args.size(); i++) {
-      if (args[i].is_array) {
-        const auto arr_sz = context.array_runtime_sizes[i];
-        if (arr_sz == 0) {
-          continue;
-        }
-        arg_buffers[i] = context.get_arg<void *>(i);
-        if (context.device_allocation_type[i] ==
-            RuntimeContext::DevAllocType::kNone) {
-          // Note: both numpy and PyTorch support arrays/tensors with zeros
-          // in shapes, e.g., shape=(0) or shape=(100, 0, 200). This makes
-          // `arr_sz` zero.
-          unsigned int attr_val = 0;
-          uint32_t ret_code = CUDADriver::get_instance().mem_get_attribute.call(
-              &attr_val, CU_POINTER_ATTRIBUTE_MEMORY_TYPE,
-              (void *)arg_buffers[i]);
-
-          if (ret_code != CUDA_SUCCESS || attr_val != CU_MEMORYTYPE_DEVICE) {
-            // Copy to device buffer if arg is on host
-            // - ret_code != CUDA_SUCCESS:
-            //   arg_buffers[i] is not on device
-            // - attr_val != CU_MEMORYTYPE_DEVICE:
-            //   Cuda driver is aware of arg_buffers[i] but it might be on
-            //   host.
-            // See CUDA driver API `cuPointerGetAttribute` for more details.
-            transferred = true;
-            CUDADriver::get_instance().malloc(&device_buffers[i], arr_sz);
-            CUDADriver::get_instance().memcpy_host_to_device(
-                (void *)device_buffers[i], arg_buffers[i], arr_sz);
-          } else {
-            device_buffers[i] = arg_buffers[i];
-          }
-          // device_buffers[i] saves a raw ptr on CUDA device.
-          context.set_arg(i, (uint64)device_buffers[i]);
-
-        } else if (arr_sz > 0) {
-          // arg_buffers[i] is a DeviceAllocation*
-          // TODO: Unwraps DeviceAllocation* can be done at TaskCodeGenLLVM
-          // since it's shared by cpu and cuda.
-          DeviceAllocation *ptr =
-              static_cast<DeviceAllocation *>(arg_buffers[i]);
-          device_buffers[i] = executor->get_ndarray_alloc_info_ptr(*ptr);
-          // We compare arg_buffers[i] and device_buffers[i] later to check
-          // if transfer happened.
-          // TODO: this logic can be improved but I'll leave it to a followup
-          // PR.
-          arg_buffers[i] = device_buffers[i];
-
-          // device_buffers[i] saves the unwrapped raw ptr from arg_buffers[i]
-          context.set_arg(i, (uint64)device_buffers[i]);
-        }
-      }
-    }
-    if (transferred) {
-      CUDADriver::get_instance().stream_synchronize(nullptr);
-    }
-
-    for (auto task : offloaded_tasks) {
-      TI_TRACE("Launching kernel {}<<<{}, {}>>>", task.name, task.grid_dim,
-               task.block_dim);
-      cuda_module->launch(task.name, task.grid_dim, task.block_dim, 0,
-                          {&context});
-    }
-
-    // copy data back to host
-    if (transferred) {
-      CUDADriver::get_instance().stream_synchronize(nullptr);
-      for (int i = 0; i < (int)args.size(); i++) {
-        if (device_buffers[i] != arg_buffers[i]) {
-          CUDADriver::get_instance().memcpy_device_to_host(
-              arg_buffers[i], (void *)device_buffers[i],
-              context.array_runtime_sizes[i]);
-          CUDADriver::get_instance().mem_free((void *)device_buffers[i]);
-        }
-      }
-    }
-  };
-#else
-  TI_ERROR("No CUDA");
-  return nullptr;
-#endif  // TI_WITH_CUDA
 }
 
 }  // namespace taichi::lang

@@ -12,6 +12,10 @@ if (TI_WITH_CUDA)
   target_compile_definitions(${INTEROP_RHI} PRIVATE -DTI_WITH_CUDA)
 endif()
 
+if (TI_WITH_AMDGPU)
+  target_compile_definitions(${INTEROP_RHI} PRIVATE -DTI_WITH_AMDGPU)
+endif()
+
 if (TI_WITH_VULKAN)
   target_compile_definitions(${INTEROP_RHI} PRIVATE -DTI_WITH_VULKAN)
 endif()
@@ -19,7 +23,6 @@ endif()
 target_include_directories(${INTEROP_RHI}
   PRIVATE
     ${PROJECT_SOURCE_DIR}
-    ${PROJECT_SOURCE_DIR}/external/eigen
     ${PROJECT_SOURCE_DIR}/external/volk
     ${PROJECT_SOURCE_DIR}/external/spdlog/include
     ${PROJECT_SOURCE_DIR}/external/SPIRV-Tools/include

@@ -16,6 +16,8 @@
 #include "taichi/ui/common/app_config.h"
 #include "taichi/program/ndarray.h"
 
+struct GLFWwindow;
+
 namespace taichi::ui {
 
 class WindowBase {
@@ -38,6 +40,8 @@ class WindowBase {
 
   virtual CanvasBase *get_canvas();
 
+  virtual SceneBase *get_scene();
+
   virtual void show();
 
   virtual std::pair<uint32_t, uint32_t> get_window_shape() = 0;
@@ -48,7 +52,7 @@ class WindowBase {
 
   virtual std::vector<uint32_t> &get_image_buffer(uint32_t &w, uint32_t &h) = 0;
 
-  virtual GuiBase *GUI();
+  virtual GuiBase *gui();
 
   virtual ~WindowBase();
 
@@ -65,7 +69,7 @@ class WindowBase {
   Event current_event_{EventType::Any, ""};
 
  protected:
-  WindowBase(AppConfig config);
+  explicit WindowBase(AppConfig config);
 
   void set_callbacks();
 

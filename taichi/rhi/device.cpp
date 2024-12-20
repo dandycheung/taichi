@@ -14,189 +14,29 @@
 
 namespace taichi::lang {
 
-// FIXME: (penguinliong) We might have to differentiate buffer formats and
-// texture formats at some point because formats like `rgb10a2` are not easily
-// represented by primitive types.
-std::pair<DataType, uint32_t> buffer_format2type_channels(BufferFormat format) {
-  switch (format) {
-    case BufferFormat::r8:
-      return std::make_pair<DataType, uint32_t>(
-          PrimitiveType::get(PrimitiveTypeID::u8), 1);
-    case BufferFormat::rg8:
-      return std::make_pair<DataType, uint32_t>(
-          PrimitiveType::get(PrimitiveTypeID::u8), 2);
-    case BufferFormat::rgba8:
-      return std::make_pair<DataType, uint32_t>(
-          PrimitiveType::get(PrimitiveTypeID::u8), 4);
-    case BufferFormat::rgba8srgb:
-      return std::make_pair<DataType, uint32_t>(
-          PrimitiveType::get(PrimitiveTypeID::u8), 4);
-    case BufferFormat::bgra8:
-      return std::make_pair<DataType, uint32_t>(
-          PrimitiveType::get(PrimitiveTypeID::u8), 4);
-    case BufferFormat::bgra8srgb:
-      return std::make_pair<DataType, uint32_t>(
-          PrimitiveType::get(PrimitiveTypeID::u8), 4);
-    case BufferFormat::r8u:
-      return std::make_pair<DataType, uint32_t>(
-          PrimitiveType::get(PrimitiveTypeID::u8), 1);
-    case BufferFormat::rg8u:
-      return std::make_pair<DataType, uint32_t>(
-          PrimitiveType::get(PrimitiveTypeID::u8), 2);
-    case BufferFormat::rgba8u:
-      return std::make_pair<DataType, uint32_t>(
-          PrimitiveType::get(PrimitiveTypeID::u8), 4);
-    case BufferFormat::r8i:
-      return std::make_pair<DataType, uint32_t>(
-          PrimitiveType::get(PrimitiveTypeID::i8), 1);
-    case BufferFormat::rg8i:
-      return std::make_pair<DataType, uint32_t>(
-          PrimitiveType::get(PrimitiveTypeID::i8), 2);
-    case BufferFormat::rgba8i:
-      return std::make_pair<DataType, uint32_t>(
-          PrimitiveType::get(PrimitiveTypeID::i8), 4);
-    case BufferFormat::r16:
-      return std::make_pair<DataType, uint32_t>(
-          PrimitiveType::get(PrimitiveTypeID::u16), 1);
-    case BufferFormat::rg16:
-      return std::make_pair<DataType, uint32_t>(
-          PrimitiveType::get(PrimitiveTypeID::u16), 2);
-    case BufferFormat::rgb16:
-      return std::make_pair<DataType, uint32_t>(
-          PrimitiveType::get(PrimitiveTypeID::u16), 3);
-    case BufferFormat::rgba16:
-      return std::make_pair<DataType, uint32_t>(
-          PrimitiveType::get(PrimitiveTypeID::u16), 4);
-    case BufferFormat::r16u:
-      return std::make_pair<DataType, uint32_t>(
-          PrimitiveType::get(PrimitiveTypeID::u16), 1);
-    case BufferFormat::rg16u:
-      return std::make_pair<DataType, uint32_t>(
-          PrimitiveType::get(PrimitiveTypeID::u16), 2);
-    case BufferFormat::rgb16u:
-      return std::make_pair<DataType, uint32_t>(
-          PrimitiveType::get(PrimitiveTypeID::u16), 3);
-    case BufferFormat::rgba16u:
-      return std::make_pair<DataType, uint32_t>(
-          PrimitiveType::get(PrimitiveTypeID::u16), 4);
-    case BufferFormat::r16i:
-      return std::make_pair<DataType, uint32_t>(
-          PrimitiveType::get(PrimitiveTypeID::i16), 1);
-    case BufferFormat::rg16i:
-      return std::make_pair<DataType, uint32_t>(
-          PrimitiveType::get(PrimitiveTypeID::i16), 2);
-    case BufferFormat::rgb16i:
-      return std::make_pair<DataType, uint32_t>(
-          PrimitiveType::get(PrimitiveTypeID::i16), 3);
-    case BufferFormat::rgba16i:
-      return std::make_pair<DataType, uint32_t>(
-          PrimitiveType::get(PrimitiveTypeID::i16), 4);
-    case BufferFormat::r16f:
-      return std::make_pair<DataType, uint32_t>(
-          PrimitiveType::get(PrimitiveTypeID::f16), 1);
-    case BufferFormat::rg16f:
-      return std::make_pair<DataType, uint32_t>(
-          PrimitiveType::get(PrimitiveTypeID::f16), 2);
-    case BufferFormat::rgb16f:
-      return std::make_pair<DataType, uint32_t>(
-          PrimitiveType::get(PrimitiveTypeID::f16), 3);
-    case BufferFormat::rgba16f:
-      return std::make_pair<DataType, uint32_t>(
-          PrimitiveType::get(PrimitiveTypeID::f16), 4);
-    case BufferFormat::r32u:
-      return std::make_pair<DataType, uint32_t>(
-          PrimitiveType::get(PrimitiveTypeID::u32), 1);
-    case BufferFormat::rg32u:
-      return std::make_pair<DataType, uint32_t>(
-          PrimitiveType::get(PrimitiveTypeID::u32), 2);
-    case BufferFormat::rgb32u:
-      return std::make_pair<DataType, uint32_t>(
-          PrimitiveType::get(PrimitiveTypeID::u32), 3);
-    case BufferFormat::rgba32u:
-      return std::make_pair<DataType, uint32_t>(
-          PrimitiveType::get(PrimitiveTypeID::u32), 4);
-    case BufferFormat::r32i:
-      return std::make_pair<DataType, uint32_t>(
-          PrimitiveType::get(PrimitiveTypeID::i32), 1);
-    case BufferFormat::rg32i:
-      return std::make_pair<DataType, uint32_t>(
-          PrimitiveType::get(PrimitiveTypeID::i32), 2);
-    case BufferFormat::rgb32i:
-      return std::make_pair<DataType, uint32_t>(
-          PrimitiveType::get(PrimitiveTypeID::i32), 3);
-    case BufferFormat::rgba32i:
-      return std::make_pair<DataType, uint32_t>(
-          PrimitiveType::get(PrimitiveTypeID::i32), 4);
-    case BufferFormat::r32f:
-      return std::make_pair<DataType, uint32_t>(
-          PrimitiveType::get(PrimitiveTypeID::f32), 1);
-    case BufferFormat::rg32f:
-      return std::make_pair<DataType, uint32_t>(
-          PrimitiveType::get(PrimitiveTypeID::f32), 2);
-    case BufferFormat::rgb32f:
-      return std::make_pair<DataType, uint32_t>(
-          PrimitiveType::get(PrimitiveTypeID::f32), 3);
-    case BufferFormat::rgba32f:
-      return std::make_pair<DataType, uint32_t>(
-          PrimitiveType::get(PrimitiveTypeID::f32), 4);
+const std::string rhi_result_to_string(RhiResult result) {
+  switch (result) {
+    case RhiResult::success:
+      return "success";
+    case RhiResult::error:
+      return "error";
+    case RhiResult::invalid_usage:
+      return "invalid_usage";
+    case RhiResult::not_supported:
+      return "not_supported";
+    case RhiResult::out_of_memory:
+      return "out_of_memory";
     default:
-      TI_ERROR("Invalid buffer format");
-      return {};
+      return "unknown";
   }
-}
-BufferFormat type_channels2buffer_format(const DataType &type,
-                                         uint32_t num_channels) {
-  BufferFormat format;
-  if (type == PrimitiveType::f16) {
-    if (num_channels == 1) {
-      format = BufferFormat::r16f;
-    } else if (num_channels == 2) {
-      format = BufferFormat::rg16f;
-    } else if (num_channels == 4) {
-      format = BufferFormat::rgba16f;
-    } else {
-      TI_ERROR("Invalid texture channels");
-    }
-  } else if (type == PrimitiveType::u16) {
-    if (num_channels == 1) {
-      format = BufferFormat::r16;
-    } else if (num_channels == 2) {
-      format = BufferFormat::rg16;
-    } else if (num_channels == 4) {
-      format = BufferFormat::rgba16;
-    } else {
-      TI_ERROR("Invalid texture channels");
-    }
-  } else if (type == PrimitiveType::u8) {
-    if (num_channels == 1) {
-      format = BufferFormat::r8;
-    } else if (num_channels == 2) {
-      format = BufferFormat::rg8;
-    } else if (num_channels == 4) {
-      format = BufferFormat::rgba8;
-    } else {
-      TI_ERROR("Invalid texture channels");
-    }
-  } else if (type == PrimitiveType::f32) {
-    if (num_channels == 1) {
-      format = BufferFormat::r32f;
-    } else if (num_channels == 2) {
-      format = BufferFormat::rg32f;
-    } else if (num_channels == 3) {
-      format = BufferFormat::rgb32f;
-    } else if (num_channels == 4) {
-      format = BufferFormat::rgba32f;
-    } else {
-      TI_ERROR("Invalid texture channels");
-    }
-  } else {
-    TI_ERROR("Invalid texture dtype");
-  }
-  return format;
 }
 
 DeviceAllocationGuard::~DeviceAllocationGuard() {
   device->dealloc_memory(*this);
+}
+
+DeviceImageGuard::~DeviceImageGuard() {
+  dynamic_cast<GraphicsDevice *>(device)->destroy_image(*this);
 }
 
 DevicePtr DeviceAllocation::get_ptr(uint64_t offset) const {
@@ -288,32 +128,12 @@ void Device::memcpy_via_host(DevicePtr dst,
   TI_NOT_IMPLEMENTED;
 }
 
-const std::string to_string(DeviceCapability c) {
-#define PER_DEVICE_CAPABILITY(name) \
-  case DeviceCapability::name:      \
-    return #name;                   \
-    break;
-  switch (c) {
-#include "taichi/inc/rhi_constants.inc.h"
-    default:
-      return "Unknown";
-      break;
-  }
-#undef PER_DEVICE_CAPABILITY
-}
-
-void Device::print_all_cap() const {
-  for (auto &pair : caps_) {
-    TI_TRACE("DeviceCapability::{} ({}) = {}", to_string(pair.first),
-             int(pair.first), pair.second);
-  }
-}
-
 void GraphicsDevice::image_transition(DeviceAllocation img,
                                       ImageLayout old_layout,
                                       ImageLayout new_layout) {
   Stream *stream = get_graphics_stream();
-  auto cmd_list = stream->new_command_list();
+  auto [cmd_list, res] = stream->new_command_list_unique();
+  TI_ASSERT(res == RhiResult::success);
   cmd_list->image_transition(img, old_layout, new_layout);
   stream->submit_synced(cmd_list.get());
 }
@@ -322,7 +142,8 @@ void GraphicsDevice::buffer_to_image(DeviceAllocation dst_img,
                                      ImageLayout img_layout,
                                      const BufferImageCopyParams &params) {
   Stream *stream = get_graphics_stream();
-  auto cmd_list = stream->new_command_list();
+  auto [cmd_list, res] = stream->new_command_list_unique();
+  TI_ASSERT(res == RhiResult::success);
   cmd_list->buffer_to_image(dst_img, src_buf, img_layout, params);
   stream->submit_synced(cmd_list.get());
 }
@@ -331,9 +152,100 @@ void GraphicsDevice::image_to_buffer(DevicePtr dst_buf,
                                      ImageLayout img_layout,
                                      const BufferImageCopyParams &params) {
   Stream *stream = get_graphics_stream();
-  auto cmd_list = stream->new_command_list();
+  auto [cmd_list, res] = stream->new_command_list_unique();
+  TI_ASSERT(res == RhiResult::success);
   cmd_list->image_to_buffer(dst_buf, src_img, img_layout, params);
   stream->submit_synced(cmd_list.get());
+}
+
+RhiResult Device::upload_data(DevicePtr *device_ptr,
+                              const void **data,
+                              size_t *size,
+                              int num_alloc) noexcept {
+  if (!device_ptr || !data || !size) {
+    return RhiResult::invalid_usage;
+  }
+
+  std::vector<DeviceAllocationUnique> stagings;
+  for (int i = 0; i < num_alloc; i++) {
+    if (device_ptr[i].device != this || !data[i]) {
+      return RhiResult::invalid_usage;
+    }
+    auto [staging, res] = this->allocate_memory_unique(
+        {size[i], /*host_write=*/true, /*host_read=*/false,
+         /*export_sharing=*/false, AllocUsage::Upload});
+    if (res != RhiResult::success) {
+      return res;
+    }
+
+    void *mapped{nullptr};
+    res = this->map(*staging, &mapped);
+    if (res != RhiResult::success) {
+      return res;
+    }
+    memcpy(mapped, data[i], size[i]);
+    this->unmap(*staging);
+
+    stagings.push_back(std::move(staging));
+  }
+
+  Stream *s = this->get_compute_stream();
+  auto [cmdlist, res] = s->new_command_list_unique();
+  if (res != RhiResult::success) {
+    return res;
+  }
+  for (int i = 0; i < num_alloc; i++) {
+    cmdlist->buffer_copy(device_ptr[i], stagings[i]->get_ptr(0), size[i]);
+  }
+  s->submit_synced(cmdlist.get());
+
+  return RhiResult::success;
+}
+
+RhiResult Device::readback_data(
+    DevicePtr *device_ptr,
+    void **data,
+    size_t *size,
+    int num_alloc,
+    const std::vector<StreamSemaphore> &wait_sema) noexcept {
+  if (!device_ptr || !data || !size) {
+    return RhiResult::invalid_usage;
+  }
+
+  Stream *s = this->get_compute_stream();
+  auto [cmdlist, res] = s->new_command_list_unique();
+  if (res != RhiResult::success) {
+    return res;
+  }
+
+  std::vector<DeviceAllocationUnique> stagings;
+  for (int i = 0; i < num_alloc; i++) {
+    if (device_ptr[i].device != this || !data[i]) {
+      return RhiResult::invalid_usage;
+    }
+    auto [staging, res] = this->allocate_memory_unique(
+        {size[i], /*host_write=*/false, /*host_read=*/true,
+         /*export_sharing=*/false, AllocUsage::None});
+    if (res != RhiResult::success) {
+      return res;
+    }
+
+    cmdlist->buffer_copy(staging->get_ptr(0), device_ptr[i], size[i]);
+    stagings.push_back(std::move(staging));
+  }
+  s->submit_synced(cmdlist.get(), wait_sema);
+
+  for (int i = 0; i < num_alloc; i++) {
+    void *mapped{nullptr};
+    RhiResult res = this->map(*stagings[i], &mapped);
+    if (res != RhiResult::success) {
+      return res;
+    }
+    memcpy(data[i], mapped, size[i]);
+    this->unmap(*stagings[i]);
+  }
+
+  return RhiResult::success;
 }
 
 }  // namespace taichi::lang

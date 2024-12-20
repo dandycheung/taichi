@@ -86,6 +86,16 @@ struct Value {
   SType stype;
   // Additional flags about the value
   ValueKind flag{ValueKind::kNormal};
+
+  bool operator==(const Value &rhs) const {
+    return id == rhs.id;
+  }
+};
+
+struct ValueHasher {
+  size_t operator()(const spirv::Value &v) const {
+    return std::hash<uint32_t>()(v.id);
+  }
 };
 
 // Represent the SPIRV Label
@@ -155,6 +165,13 @@ class InstrBuilder {
     return *this;
   }
 
+  InstrBuilder &add(const std::vector<int> &v) {
+    for (const auto &v0 : v) {
+      add(v0);
+    }
+    return *this;
+  }
+
   InstrBuilder &add(const std::string &v) {
     const uint32_t word_size = sizeof(uint32_t);
     const auto nwords =
@@ -204,7 +221,8 @@ class InstrBuilder {
 // Builder to build up a single SPIR-V module
 class IRBuilder {
  public:
-  IRBuilder(const Device *device) : device_(device) {
+  IRBuilder(Arch arch, const DeviceCapabilityConfig *caps)
+      : arch_(arch), caps_(caps) {
   }
 
   template <typename... Args>
@@ -279,6 +297,11 @@ class IRBuilder {
     return val;
   }
 
+  // Make an AccessChain
+  Value make_access_chain(const SType &out_type,
+                          Value base,
+                          const std::vector<int> &indices);
+
   // Make a phi value
   PhiValue make_phi(const SType &out_type, uint32_t num_incoming);
 
@@ -314,8 +337,10 @@ class IRBuilder {
 
   // Get null stype
   SType get_null_type();
-  // Get the spirv type for a given Taichi data type
+  // Get the spirv type for a given Taichi primitive data type
   SType get_primitive_type(const DataType &dt) const;
+  // Get the spirv type for a given Taichi data type
+  SType from_taichi_type(const DataType &dt, bool has_buffer_ptr);
   // Get the size in bytes of a given Taichi data type
   size_t get_primitive_type_size(const DataType &dt) const;
   // Get the spirv uint type with the same size of a given Taichi data type
@@ -329,6 +354,8 @@ class IRBuilder {
                          spv::StorageClass storage_class);
   // Get an image type
   SType get_sampled_image_type(const SType &primitive_type, int num_dimensions);
+  SType get_underlying_image_type(const SType &primitive_type,
+                                  int num_dimensions);
   SType get_storage_image_type(BufferFormat format, int num_dimensions);
   // Get a value_type[num_elems] type
   SType get_array_type(const SType &value_type, uint32_t num_elems);
@@ -394,7 +421,7 @@ class IRBuilder {
     for (const auto &arg : args) {
       ib_.add(arg);
     }
-    if (device_->get_cap(DeviceCapability::spirv_version) >= 0x10400) {
+    if (caps_->get(DeviceCapability::spirv_version) >= 0x10400) {
       for (const auto &v : global_values) {
         ib_.add(v);
       }
@@ -445,8 +472,11 @@ class IRBuilder {
   Value le(Value a, Value b);
   Value gt(Value a, Value b);
   Value ge(Value a, Value b);
+  Value logical_and(Value a, Value b);
+  Value logical_or(Value a, Value b);
   Value bit_field_extract(Value base, Value offset, Value count);
   Value select(Value cond, Value a, Value b);
+  Value popcnt(Value x);
 
   // Create a cast that cast value to dst_type
   Value cast(const SType &dst_type, Value value);
@@ -542,7 +572,18 @@ class IRBuilder {
   Value const_i32_one_;
 
   // Use force-inline float atomic helper function
-  Value float_atomic(AtomicOpType op_type, Value addr_ptr, Value data);
+  Value float_atomic(AtomicOpType op_type,
+                     Value addr_ptr,
+                     Value data,
+                     const DataType &dt);
+  Value integer_atomic(AtomicOpType op_type,
+                       Value addr_ptr,
+                       Value data,
+                       const DataType &dt);
+  Value atomic_operation(Value addr_ptr,
+                         Value data,
+                         std::function<Value(Value, Value)> op,
+                         const DataType &dt);
   Value rand_u32(Value global_tmp_);
   Value rand_f32(Value global_tmp_);
   Value rand_i32(Value global_tmp_);
@@ -553,7 +594,8 @@ class IRBuilder {
 
   void init_random_function(Value global_tmp_);
 
-  const Device *device_;
+  Arch arch_;
+  const DeviceCapabilityConfig *caps_;
 
   // internal instruction builder
   InstrBuilder ib_;
@@ -606,6 +648,9 @@ class IRBuilder {
   // map from value to its pointer type
   std::map<std::pair<uint32_t, spv::StorageClass>, SType> pointer_type_tbl_;
   std::map<std::pair<uint32_t, int>, SType> sampled_image_ptr_tbl_;
+  std::map<std::pair<uint32_t, int>, SType>
+      sampled_image_underlying_image_type_;
+
   std::map<std::pair<BufferFormat, int>, SType> storage_image_ptr_tbl_;
 
   // map from constant int to its value

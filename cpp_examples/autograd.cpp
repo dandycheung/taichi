@@ -42,6 +42,7 @@ void autograd() {
   using namespace lang;
 
   auto program = Program(Arch::x64);
+  const auto &config = program.compile_config();
 
   int n = 10;
   program.materialize_runtime();
@@ -89,11 +90,10 @@ void autograd() {
       }
     };
 
-    auto *snode =
-        &root->dense(Axis(0), n, false).insert_children(SNodeType::place);
+    auto *snode = &root->dense(Axis(0), n).insert_children(SNodeType::place);
     snode->dt = PrimitiveType::f32;
     snode->grad_info = std::make_unique<GradInfoPrimal>(
-        &root->dense(Axis(0), n, false).insert_children(SNodeType::place));
+        &root->dense(Axis(0), n).insert_children(SNodeType::place));
     snode->get_adjoint()->dt = PrimitiveType::f32;
     snode->get_adjoint()->grad_info = std::make_unique<GradInfoAdjoint>();
     return snode;
@@ -158,27 +158,28 @@ void autograd() {
       auto *i = builder.get_loop_index(loop);
 
       auto *ext_a = builder.create_external_ptr(
-          builder.create_arg_load(0, PrimitiveType::f32, true), {i});
+          builder.create_arg_load({0}, PrimitiveType::f32, true, 0), {i});
       auto *a_grad_i = builder.create_global_load(
           builder.create_global_ptr(a->get_adjoint(), {i}));
       builder.create_global_store(ext_a, a_grad_i);
 
       auto *ext_b = builder.create_external_ptr(
-          builder.create_arg_load(1, PrimitiveType::f32, true), {i});
+          builder.create_arg_load({1}, PrimitiveType::f32, true, 0), {i});
       auto *b_grad_i = builder.create_global_load(
           builder.create_global_ptr(b->get_adjoint(), {i}));
       builder.create_global_store(ext_b, b_grad_i);
 
       auto *ext_c = builder.create_external_ptr(
-          builder.create_arg_load(2, PrimitiveType::f32, true), {i});
+          builder.create_arg_load({2}, PrimitiveType::f32, true, 0), {i});
       auto *c_i = builder.create_global_load(builder.create_global_ptr(c, {i}));
       builder.create_global_store(ext_c, c_i);
     }
 
     kernel_ext = std::make_unique<Kernel>(program, builder.extract_ir(), "ext");
-    kernel_ext->insert_arr_arg(get_data_type<int>(), /*total_dim=*/1, {n});
-    kernel_ext->insert_arr_arg(get_data_type<int>(), /*total_dim=*/1, {n});
-    kernel_ext->insert_arr_arg(get_data_type<int>(), /*total_dim=*/1, {n});
+    kernel_ext->insert_arr_param(get_data_type<int>(), /*total_dim=*/1, {n});
+    kernel_ext->insert_arr_param(get_data_type<int>(), /*total_dim=*/1, {n});
+    kernel_ext->insert_arr_param(get_data_type<int>(), /*total_dim=*/1, {n});
+    kernel_ext->finalize_params();
   }
 
   auto ctx_init = kernel_init->make_launch_context();
@@ -186,17 +187,33 @@ void autograd() {
   auto ctx_backward = kernel_backward->make_launch_context();
   auto ctx_ext = kernel_ext->make_launch_context();
   std::vector<float> ext_a(n), ext_b(n), ext_c(n);
-  ctx_ext.set_arg_external_array_with_shape(0, taichi::uint64(ext_a.data()), n,
-                                            {n});
-  ctx_ext.set_arg_external_array_with_shape(1, taichi::uint64(ext_b.data()), n,
-                                            {n});
-  ctx_ext.set_arg_external_array_with_shape(2, taichi::uint64(ext_c.data()), n,
-                                            {n});
+  ctx_ext.set_arg_external_array_with_shape({0}, taichi::uint64(ext_a.data()),
+                                            n, {n});
+  ctx_ext.set_arg_external_array_with_shape({1}, taichi::uint64(ext_b.data()),
+                                            n, {n});
+  ctx_ext.set_arg_external_array_with_shape({2}, taichi::uint64(ext_c.data()),
+                                            n, {n});
 
-  (*kernel_init)(ctx_init);
-  (*kernel_forward)(ctx_forward);
-  (*kernel_backward)(ctx_backward);
-  (*kernel_ext)(ctx_ext);
+  {
+    const auto &compiled_kernel_data =
+        program.compile_kernel(config, program.get_device_caps(), *kernel_init);
+    program.launch_kernel(compiled_kernel_data, ctx_init);
+  }
+  {
+    const auto &compiled_kernel_data = program.compile_kernel(
+        config, program.get_device_caps(), *kernel_forward);
+    program.launch_kernel(compiled_kernel_data, ctx_forward);
+  }
+  {
+    const auto &compiled_kernel_data = program.compile_kernel(
+        config, program.get_device_caps(), *kernel_backward);
+    program.launch_kernel(compiled_kernel_data, ctx_backward);
+  }
+  {
+    const auto &compiled_kernel_data =
+        program.compile_kernel(config, program.get_device_caps(), *kernel_ext);
+    program.launch_kernel(compiled_kernel_data, ctx_ext);
+  }
   for (int i = 0; i < n; i++)
     std::cout << ext_a[i] << " ";
   std::cout << std::endl;

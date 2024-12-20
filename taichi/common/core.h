@@ -133,6 +133,8 @@ class CoreState {
 //                                 Types
 //******************************************************************************
 
+using uint1 = bool;
+
 using uchar = unsigned char;
 
 using int8 = int8_t;
@@ -290,7 +292,7 @@ class DeferedExecution {
   std::function<void(void)> statement_;
 
  public:
-  DeferedExecution(const std::function<void(void)> &statement)
+  explicit DeferedExecution(const std::function<void(void)> &statement)
       : statement_(statement) {
   }
 

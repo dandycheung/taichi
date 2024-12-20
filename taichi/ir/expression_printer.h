@@ -10,7 +10,7 @@ namespace taichi::lang {
 
 class ExpressionPrinter : public ExpressionVisitor {
  public:
-  ExpressionPrinter(std::ostream *os = nullptr) : os_(os) {
+  explicit ExpressionPrinter(std::ostream *os = nullptr) : os_(os) {
   }
 
   void set_ostream(std::ostream *os) {
@@ -36,12 +36,12 @@ class ExpressionHumanFriendlyPrinter : public ExpressionPrinter {
   }
 
   void visit(ArgLoadExpression *expr) override {
-    emit(
-        fmt::format("arg[{}] (dt={})", expr->arg_id, data_type_name(expr->dt)));
+    emit(fmt::format("arg{}[{}] (dt={})", expr->create_load ? "load" : "addr",
+                     fmt::join(expr->arg_id, ", "), data_type_name(expr->dt)));
   }
 
   void visit(TexturePtrExpression *expr) override {
-    emit(fmt::format("(Texture *)(arg[{}])", expr->arg_id));
+    emit(fmt::format("(Texture *)(arg[{}])", fmt::join(expr->arg_id, ", ")));
   }
 
   void visit(TextureOpExpression *expr) override {
@@ -76,27 +76,24 @@ class ExpressionHumanFriendlyPrinter : public ExpressionPrinter {
   }
 
   void visit(TernaryOpExpression *expr) override {
-    emit(ternary_type_name(expr->type), '(');
+    emit(ternary_type_name(expr->type), "(op1: ");
     expr->op1->accept(this);
-    emit(' ');
+    emit(", op2: ");
     expr->op2->accept(this);
-    emit(' ');
+    emit(", op3: ");
     expr->op3->accept(this);
     emit(')');
   }
 
   void visit(InternalFuncCallExpression *expr) override {
-    emit("internal call ", expr->func_name, '(');
-    if (expr->with_runtime_context) {
-      emit("runtime, ");
-    }
+    emit("internal call ", expr->op->name, '(');
     emit_vector(expr->args);
     emit(')');
   }
 
   void visit(ExternalTensorExpression *expr) override {
-    emit(fmt::format("{}d_ext_arr (element_dim={}, dt={})", expr->dim,
-                     expr->element_dim, expr->dt->to_string()));
+    emit(fmt::format("{}d_ext_arr (dt={}, grad={})", expr->ndim,
+                     expr->dt->to_string(), expr->needs_grad));
   }
 
   void visit(FieldExpression *expr) override {
@@ -128,20 +125,22 @@ class ExpressionHumanFriendlyPrinter : public ExpressionPrinter {
   }
 
   void visit(IndexExpression *expr) override {
+    emit("<" + expr->ret_type->to_string() + ">");
     expr->var->accept(this);
     emit('[');
-    emit_vector(expr->indices.exprs);
+    if (expr->ret_shape.empty()) {
+      emit_vector(expr->indices_group[0].exprs);
+    } else {
+      for (auto &indices : expr->indices_group) {
+        emit('(');
+        emit_vector(indices.exprs);
+        emit("), ");
+      }
+      emit("shape=(");
+      emit_vector(expr->ret_shape);
+      emit(')');
+    }
     emit(']');
-  }
-
-  void visit(StrideExpression *expr) override {
-    expr->var->accept(this);
-    emit('[');
-    emit_vector(expr->indices.exprs);
-    emit("] (");
-    emit_vector(expr->shape);
-    emit(", stride = ", expr->stride);
-    emit(')');
   }
 
   void visit(RangeAssumptionExpression *expr) override {
@@ -166,6 +165,7 @@ class ExpressionHumanFriendlyPrinter : public ExpressionPrinter {
   }
 
   void visit(IdExpression *expr) override {
+    emit("<" + expr->ret_type->to_string() + ">");
     emit(expr->id.name());
   }
 
@@ -173,8 +173,7 @@ class ExpressionHumanFriendlyPrinter : public ExpressionPrinter {
     const auto op_type = (std::size_t)expr->op_type;
     constexpr const char *names_table[] = {
         "atomic_add",     "atomic_sub",    "atomic_min",     "atomic_max",
-        "atomic_bit_and", "atomic_bit_or", "atomic_bit_xor",
-    };
+        "atomic_bit_and", "atomic_bit_or", "atomic_bit_xor", "atomic_mul"};
     if (op_type > std::size(names_table)) {
       // min/max not supported in the LLVM backend yet.
       TI_NOT_IMPLEMENTED;
@@ -191,9 +190,9 @@ class ExpressionHumanFriendlyPrinter : public ExpressionPrinter {
     emit('(', expr->snode->get_node_type_name_hinted(), ", [");
     emit_vector(expr->indices.exprs);
     emit("]");
-    if (expr->value.expr) {
+    if (!expr->values.empty()) {
       emit(' ');
-      expr->value->accept(this);
+      emit_vector(expr->values);
     }
     emit(')');
   }
@@ -208,10 +207,10 @@ class ExpressionHumanFriendlyPrinter : public ExpressionPrinter {
     emit(", ", expr->axis, ')');
   }
 
-  void visit(FuncCallExpression *expr) override {
-    emit("func_call(\"", expr->func->func_key.get_full_name(), "\", ");
-    emit_vector(expr->args.exprs);
-    emit(')');
+  void visit(ExternalTensorBasePtrExpression *expr) override {
+    emit("external_tensor_base_ptr(");
+    expr->ptr->accept(this);
+    emit(", is_grad=", expr->is_grad, ')');
   }
 
   void visit(MeshPatchIndexExpression *expr) override {
@@ -245,7 +244,19 @@ class ExpressionHumanFriendlyPrinter : public ExpressionPrinter {
     emit(")");
   }
 
+  void visit(GetElementExpression *expr) override {
+    emit("get_element(");
+    expr->src->accept(this);
+    emit(", ");
+    emit_vector(expr->index);
+    emit(")");
+  }
+
   static std::string expr_to_string(Expr &expr) {
+    return expr_to_string(expr.expr.get());
+  }
+
+  static std::string expr_to_string(Expression *expr) {
     std::ostringstream oss;
     ExpressionHumanFriendlyPrinter printer(&oss);
     expr->accept(&printer);

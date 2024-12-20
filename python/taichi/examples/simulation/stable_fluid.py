@@ -14,10 +14,21 @@ import taichi as ti
 #   `python stable_fluid.py`: use the jacobi iteration to solve the linear system.
 #   `python stable_fluid.py -S`: use a sparse matrix to do so.
 parser = argparse.ArgumentParser()
-parser.add_argument('-S',
-                    '--use-sp-mat',
-                    action='store_true',
-                    help='Solve Poisson\'s equation by using a sparse matrix')
+parser.add_argument(
+    "-S",
+    "--use-sp-mat",
+    action="store_true",
+    help="Solve Poisson's equation by using a sparse matrix",
+)
+parser.add_argument(
+    "-a",
+    "--arch",
+    required=False,
+    default="cpu",
+    dest="arch",
+    type=str,
+    help="The arch (backend) to run this example on",
+)
 args, unknowns = parser.parse_known_args()
 
 res = 512
@@ -32,13 +43,18 @@ force_radius = res / 2.0
 debug = False
 
 use_sparse_matrix = args.use_sp_mat
+arch = args.arch
+if arch in ["x64", "cpu", "arm64"]:
+    ti.init(arch=ti.cpu)
+elif arch in ["cuda", "gpu"]:
+    ti.init(arch=ti.cuda)
+else:
+    raise ValueError("Only CPU and CUDA backends are supported for now.")
 
 if use_sparse_matrix:
-    ti.init(arch=ti.x64)
-    print('Using sparse matrix')
+    print("Using sparse matrix")
 else:
-    ti.init(arch=ti.gpu)
-    print('Using jacobi iteration')
+    print("Using jacobi iteration")
 
 _velocities = ti.Vector.field(2, float, shape=(res, res))
 _new_velocities = ti.Vector.field(2, float, shape=(res, res))
@@ -86,7 +102,7 @@ if use_sparse_matrix:
 
     N = res * res
     K = ti.linalg.SparseMatrixBuilder(N, N, max_num_triplets=N * 6)
-    F_b = ti.field(ti.f32, shape=N)
+    F_b = ti.ndarray(ti.f32, shape=N)
 
     fill_laplacian_matrix(K)
     L = K.build()
@@ -98,7 +114,7 @@ if use_sparse_matrix:
 @ti.func
 def sample(qf, u, v):
     I = ti.Vector([int(u), int(v)])
-    I = max(0, min(res - 1, I))
+    I = ti.max(0, ti.min(res - 1, I))
     return qf[I]
 
 
@@ -144,8 +160,7 @@ def advect(vf: ti.template(), qf: ti.template(), new_qf: ti.template()):
 
 
 @ti.kernel
-def apply_impulse(vf: ti.template(), dyef: ti.template(),
-                  imp_data: ti.types.ndarray()):
+def apply_impulse(vf: ti.template(), dyef: ti.template(), imp_data: ti.types.ndarray()):
     g_dir = -ti.Vector([0, 9.8]) * 300
     for i, j in vf:
         omx, omy = imp_data[2], imp_data[3]
@@ -164,8 +179,7 @@ def apply_impulse(vf: ti.template(), dyef: ti.template(),
         vf[i, j] = v + momentum
         # add dye
         if mdir.norm() > 0.5:
-            dc += ti.exp(-d2 * (4 / (res / 15)**2)) * ti.Vector(
-                [imp_data[4], imp_data[5], imp_data[6]])
+            dc += ti.exp(-d2 * (4 / (res / 15) ** 2)) * ti.Vector([imp_data[4], imp_data[5], imp_data[6]])
 
         dyef[i, j] = dc
 
@@ -229,14 +243,13 @@ def enhance_vorticity(vf: ti.template(), cf: ti.template()):
         cb = sample(cf, i, j - 1)
         ct = sample(cf, i, j + 1)
         cc = sample(cf, i, j)
-        force = ti.Vector([abs(ct) - abs(cb),
-                           abs(cl) - abs(cr)]).normalized(1e-3)
+        force = ti.Vector([abs(ct) - abs(cb), abs(cl) - abs(cr)]).normalized(1e-3)
         force *= curl_strength * cc
-        vf[i, j] = min(max(vf[i, j] + force * dt, -1e3), 1e3)
+        vf[i, j] = ti.min(ti.max(vf[i, j] + force * dt, -1e3), 1e3)
 
 
 @ti.kernel
-def copy_divergence(div_in: ti.template(), div_out: ti.template()):
+def copy_divergence(div_in: ti.template(), div_out: ti.types.ndarray()):
     for I in ti.grouped(div_in):
         div_out[I[0] * res + I[1]] = -div_in[I]
 
@@ -283,7 +296,7 @@ def step(mouse_data):
     if debug:
         divergence(velocities_pair.cur)
         div_s = np.sum(velocity_divs.to_numpy())
-        print(f'divergence={div_s}')
+        print(f"divergence={div_s}")
 
 
 class MouseDataGen:
@@ -323,13 +336,13 @@ def reset():
 
 def main():
     global debug, curl_strength
-    visualize_d = True  #visualize dye (default)
-    visualize_v = False  #visualize velocity
-    visualize_c = False  #visualize curl
+    visualize_d = True  # visualize dye (default)
+    visualize_v = False  # visualize velocity
+    visualize_c = False  # visualize curl
 
     paused = False
 
-    gui = ti.GUI('Stable Fluid', (res, res))
+    gui = ti.GUI("Stable Fluid", (res, res))
     md_gen = MouseDataGen()
 
     while gui.running:
@@ -337,29 +350,29 @@ def main():
             e = gui.event
             if e.key == ti.GUI.ESCAPE:
                 break
-            elif e.key == 'r':
+            elif e.key == "r":
                 paused = False
                 reset()
-            elif e.key == 's':
+            elif e.key == "s":
                 if curl_strength:
                     curl_strength = 0
                 else:
                     curl_strength = 7
-            elif e.key == 'v':
+            elif e.key == "v":
                 visualize_v = True
                 visualize_c = False
                 visualize_d = False
-            elif e.key == 'd':
+            elif e.key == "d":
                 visualize_d = True
                 visualize_v = False
                 visualize_c = False
-            elif e.key == 'c':
+            elif e.key == "c":
                 visualize_c = True
                 visualize_d = False
                 visualize_v = False
-            elif e.key == 'p':
+            elif e.key == "p":
                 paused = not paused
-            elif e.key == 'd':
+            elif e.key == "d":
                 debug = not debug
 
         # Debug divergence:
@@ -378,5 +391,5 @@ def main():
         gui.show()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

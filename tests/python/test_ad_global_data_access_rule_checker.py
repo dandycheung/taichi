@@ -1,10 +1,11 @@
 import pytest
+from taichi.lang.enums import AutodiffMode
 
 import taichi as ti
 from tests import test_utils
 
 
-@test_utils.test(debug=True, validate_autodiff=True, exclude=[ti.cc])
+@test_utils.test(debug=True)
 def test_adjoint_checkbit_needs_grad():
     x = ti.field(float, shape=(), needs_grad=True)
 
@@ -18,7 +19,7 @@ def test_adjoint_checkbit_needs_grad():
     assert x.snode.ptr.has_adjoint_checkbit()
 
 
-@test_utils.test(debug=True, validate_autodiff=True, exclude=[ti.cc])
+@test_utils.test(debug=True)
 def test_adjoint_checkbit_lazy_grad():
     x = ti.field(float, shape=())
     ti.root.lazy_grad()
@@ -33,7 +34,7 @@ def test_adjoint_checkbit_lazy_grad():
     assert x.snode.ptr.has_adjoint_checkbit()
 
 
-@test_utils.test(debug=True, validate_autodiff=True, exclude=[ti.cc])
+@test_utils.test(debug=True)
 def test_adjoint_checkbit_place_grad():
     x = ti.field(float)
     y = ti.field(float)
@@ -50,7 +51,7 @@ def test_adjoint_checkbit_place_grad():
     assert not y.snode.ptr.has_adjoint_checkbit()
 
 
-@test_utils.test(debug=False, validate_autodiff=True)
+@test_utils.test(debug=False)
 def test_adjoint_checkbit_needs_grad():
     x = ti.field(float, shape=(), needs_grad=True)
 
@@ -64,16 +65,15 @@ def test_adjoint_checkbit_needs_grad():
 
     warn_raised = False
     for warn in record:
-        if 'Debug mode is disabled, autodiff valid check will not work. Please specify `ti.init(debug=True)` to enable the check.' in warn.message.args[
-                0]:
+        if (
+            "Debug mode is disabled, autodiff valid check will not work. Please specify `ti.init(debug=True)` to enable the check."
+            in warn.message.args[0]
+        ):
             warn_raised = True
     assert warn_raised
 
 
-@test_utils.test(require=ti.extension.assertion,
-                 exclude=[ti.cc],
-                 debug=True,
-                 validate_autodiff=True)
+@test_utils.test(require=ti.extension.assertion, debug=True)
 def test_break_gdar_rule_1():
     N = 16
     x = ti.field(dtype=ti.f32, shape=N, needs_grad=True)
@@ -96,10 +96,7 @@ def test_break_gdar_rule_1():
             func_broke_rule_1()
 
 
-@test_utils.test(require=ti.extension.assertion,
-                 exclude=[ti.cc],
-                 debug=True,
-                 validate_autodiff=True)
+@test_utils.test(require=ti.extension.assertion, debug=True)
 def test_skip_grad_replaced():
     N = 16
     x = ti.field(dtype=ti.f32, shape=N, needs_grad=True)
@@ -134,3 +131,67 @@ def test_skip_grad_replaced():
 
     with ti.ad.Tape(loss=loss, validation=True):
         kernel_2()
+
+
+@test_utils.test(require=ti.extension.assertion, debug=True)
+def test_autodiff_mode_recovered():
+    N = 16
+    x = ti.field(dtype=ti.f32, shape=N, needs_grad=True)
+    loss = ti.field(dtype=ti.f32, shape=(), needs_grad=True)
+    b = ti.field(dtype=ti.f32, shape=(), needs_grad=True)
+
+    @ti.kernel
+    def kernel_1():
+        loss[None] = x[1] * b[None]
+
+    @ti.kernel
+    def kernel_2():
+        loss[None] = x[1] * b[None]
+
+    for i in range(N):
+        x[i] = i
+
+    b[None] = 10
+    loss.grad[None] = 1
+
+    func_calls = []
+    with ti.ad.Tape(loss=loss, validation=True) as t:
+        kernel_1()
+        kernel_2()
+        for f, _ in t.calls:
+            assert f.autodiff_mode == AutodiffMode.VALIDATION
+        func_calls = t.calls
+    for f, _ in func_calls:
+        assert f.autodiff_mode == AutodiffMode.NONE
+
+
+@test_utils.test(require=ti.extension.assertion, debug=True)
+def test_validation_kernel_capture():
+    N = 16
+    T = 8
+    x = ti.field(dtype=ti.f32, shape=N, needs_grad=True)
+    loss = ti.field(dtype=ti.f32, shape=(), needs_grad=True)
+    b = ti.field(dtype=ti.f32, shape=(), needs_grad=True)
+
+    @ti.kernel
+    def kernel_1():
+        loss[None] = x[1] * b[None]
+
+    @ti.kernel
+    def kernel_2():
+        loss[None] = x[1] * b[None]
+
+    def forward(T):
+        for t in range(T):
+            kernel_1()
+            kernel_2()
+
+    for i in range(N):
+        x[i] = i
+
+    b[None] = 10
+    loss.grad[None] = 1
+
+    with ti.ad.Tape(loss=loss, validation=True) as t:
+        forward(T)
+        assert len(t.calls) == 2 * T and len(t.modes) == 2 * T

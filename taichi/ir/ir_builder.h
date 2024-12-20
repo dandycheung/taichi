@@ -2,6 +2,7 @@
 
 #include "taichi/ir/ir.h"
 #include "taichi/ir/mesh.h"
+#include "taichi/ir/statements.h"
 
 namespace taichi::lang {
 
@@ -137,14 +138,22 @@ class IRBuilder {
   ConstStmt *get_float64(float64 value);
 
   template <typename T>
-  ConstStmt *get_constant(DataType dt, const T &value) {
+  Stmt *get_constant(DataType dt, const T &value) {
     return insert(Stmt::make_typed<ConstStmt>(TypedConstant(dt, value)));
   }
 
   RandStmt *create_rand(DataType value_type);
 
   // Load kernel arguments.
-  ArgLoadStmt *create_arg_load(int arg_id, DataType dt, bool is_ptr);
+  ArgLoadStmt *create_arg_load(const std::vector<int> &arg_id,
+                               DataType dt,
+                               bool is_ptr,
+                               int arg_depth);
+  // Load kernel arguments.
+  ArgLoadStmt *create_ndarray_arg_load(const std::vector<int> &arg_id,
+                                       DataType dt,
+                                       int total_dim,
+                                       int arg_depth);
 
   // The return value of the kernel.
   ReturnStmt *create_return(Stmt *value);
@@ -170,6 +179,8 @@ class IRBuilder {
   UnaryOpStmt *create_tanh(Stmt *value);
   UnaryOpStmt *create_exp(Stmt *value);
   UnaryOpStmt *create_log(Stmt *value);
+  UnaryOpStmt *create_popcnt(Stmt *value);
+  UnaryOpStmt *create_clz(Stmt *value);
 
   // Binary operations. Returns the result.
   BinaryOpStmt *create_add(Stmt *l, Stmt *r);
@@ -200,6 +211,9 @@ class IRBuilder {
   BinaryOpStmt *create_cmp_ge(Stmt *l, Stmt *r);
   BinaryOpStmt *create_cmp_eq(Stmt *l, Stmt *r);
   BinaryOpStmt *create_cmp_ne(Stmt *l, Stmt *r);
+  // Logical
+  BinaryOpStmt *create_logical_or(Stmt *l, Stmt *r);
+  BinaryOpStmt *create_logical_and(Stmt *l, Stmt *r);
 
   // Atomic operations.
   AtomicOpStmt *create_atomic_add(Stmt *dest, Stmt *val);
@@ -210,6 +224,7 @@ class IRBuilder {
   AtomicOpStmt *create_atomic_and(Stmt *dest, Stmt *val);
   AtomicOpStmt *create_atomic_or(Stmt *dest, Stmt *val);
   AtomicOpStmt *create_atomic_xor(Stmt *dest, Stmt *val);
+  AtomicOpStmt *create_atomic_mul(Stmt *dest, Stmt *val);
 
   // Ternary operations. Returns the result.
   TernaryOpStmt *create_select(Stmt *cond,
@@ -234,7 +249,8 @@ class IRBuilder {
   GlobalPtrStmt *create_global_ptr(SNode *snode,
                                    const std::vector<Stmt *> &indices);
   ExternalPtrStmt *create_external_ptr(ArgLoadStmt *ptr,
-                                       const std::vector<Stmt *> &indices);
+                                       const std::vector<Stmt *> &indices,
+                                       bool is_grad = false);
   template <typename XStmt>
   GlobalLoadStmt *create_global_load(XStmt *ptr) {
     using DecayedType = typename std::decay_t<XStmt>;
@@ -278,10 +294,6 @@ class IRBuilder {
                                               Stmt *mesh_idx,
                                               mesh::MeshElementType to_type,
                                               Stmt *neighbor_idx);
-  MeshIndexConversionStmt *get_index_conversion(mesh::Mesh *mesh,
-                                                mesh::MeshElementType idx_type,
-                                                Stmt *idx,
-                                                mesh::ConvType conv_type);
   MeshPatchIndexStmt *get_patch_index();
 
  private:

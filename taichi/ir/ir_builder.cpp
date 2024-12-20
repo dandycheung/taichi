@@ -178,8 +178,12 @@ RandStmt *IRBuilder::create_rand(DataType value_type) {
   return insert(Stmt::make_typed<RandStmt>(value_type));
 }
 
-ArgLoadStmt *IRBuilder::create_arg_load(int arg_id, DataType dt, bool is_ptr) {
-  return insert(Stmt::make_typed<ArgLoadStmt>(arg_id, dt, is_ptr));
+ArgLoadStmt *IRBuilder::create_arg_load(const std::vector<int> &arg_id,
+                                        DataType dt,
+                                        bool is_ptr,
+                                        int arg_depth) {
+  return insert(Stmt::make_typed<ArgLoadStmt>(arg_id, dt, is_ptr,
+                                              /*create_load*/ true, arg_depth));
 }
 
 ReturnStmt *IRBuilder::create_return(Stmt *value) {
@@ -268,6 +272,14 @@ UnaryOpStmt *IRBuilder::create_exp(Stmt *value) {
 
 UnaryOpStmt *IRBuilder::create_log(Stmt *value) {
   return insert(Stmt::make_typed<UnaryOpStmt>(UnaryOpType::log, value));
+}
+
+UnaryOpStmt *IRBuilder::create_popcnt(Stmt *value) {
+  return insert(Stmt::make_typed<UnaryOpStmt>(UnaryOpType::popcnt, value));
+}
+
+UnaryOpStmt *IRBuilder::create_clz(Stmt *value) {
+  return insert(Stmt::make_typed<UnaryOpStmt>(UnaryOpType::clz, value));
 }
 
 BinaryOpStmt *IRBuilder::create_add(Stmt *l, Stmt *r) {
@@ -362,6 +374,15 @@ BinaryOpStmt *IRBuilder::create_cmp_ne(Stmt *l, Stmt *r) {
   return insert(Stmt::make_typed<BinaryOpStmt>(BinaryOpType::cmp_ne, l, r));
 }
 
+BinaryOpStmt *IRBuilder::create_logical_or(Stmt *l, Stmt *r) {
+  return insert(Stmt::make_typed<BinaryOpStmt>(BinaryOpType::logical_or, l, r));
+}
+
+BinaryOpStmt *IRBuilder::create_logical_and(Stmt *l, Stmt *r) {
+  return insert(
+      Stmt::make_typed<BinaryOpStmt>(BinaryOpType::logical_and, l, r));
+}
+
 AtomicOpStmt *IRBuilder::create_atomic_add(Stmt *dest, Stmt *val) {
   return insert(Stmt::make_typed<AtomicOpStmt>(AtomicOpType::add, dest, val));
 }
@@ -393,6 +414,10 @@ AtomicOpStmt *IRBuilder::create_atomic_xor(Stmt *dest, Stmt *val) {
       Stmt::make_typed<AtomicOpStmt>(AtomicOpType::bit_xor, dest, val));
 }
 
+AtomicOpStmt *IRBuilder::create_atomic_mul(Stmt *dest, Stmt *val) {
+  return insert(Stmt::make_typed<AtomicOpStmt>(AtomicOpType::mul, dest, val));
+}
+
 TernaryOpStmt *IRBuilder::create_select(Stmt *cond,
                                         Stmt *true_result,
                                         Stmt *false_result) {
@@ -420,9 +445,10 @@ GlobalPtrStmt *IRBuilder::create_global_ptr(
 
 ExternalPtrStmt *IRBuilder::create_external_ptr(
     ArgLoadStmt *ptr,
-    const std::vector<Stmt *> &indices) {
-  return insert(
-      Stmt::make_typed<ExternalPtrStmt>(ptr, indices, std::vector<int>(), 0));
+    const std::vector<Stmt *> &indices,
+    bool is_grad) {
+  return insert(Stmt::make_typed<ExternalPtrStmt>(ptr, indices, indices.size(),
+                                                  std::vector<int>(), is_grad));
 }
 
 AdStackAllocaStmt *IRBuilder::create_ad_stack(const DataType &dt,
@@ -475,17 +501,18 @@ MeshRelationAccessStmt *IRBuilder::get_relation_access(
       mesh, mesh_idx, to_type, neighbor_idx));
 }
 
-MeshIndexConversionStmt *IRBuilder::get_index_conversion(
-    mesh::Mesh *mesh,
-    mesh::MeshElementType idx_type,
-    Stmt *idx,
-    mesh::ConvType conv_type) {
-  return insert(Stmt::make_typed<MeshIndexConversionStmt>(mesh, idx_type, idx,
-                                                          conv_type));
-}
-
 MeshPatchIndexStmt *IRBuilder::get_patch_index() {
   return insert(Stmt::make_typed<MeshPatchIndexStmt>());
+}
+ArgLoadStmt *IRBuilder::create_ndarray_arg_load(const std::vector<int> &arg_id,
+                                                DataType dt,
+                                                int ndim,
+                                                int arg_depth) {
+  auto type = TypeFactory::get_instance().get_ndarray_struct_type(dt, ndim);
+
+  return insert(Stmt::make_typed<ArgLoadStmt>(arg_id, type, /*is_ptr=*/true,
+                                              /*create_load=*/false,
+                                              /*arg_depth=*/arg_depth));
 }
 
 }  // namespace taichi::lang

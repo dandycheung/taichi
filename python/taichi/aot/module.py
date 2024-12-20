@@ -1,3 +1,6 @@
+import datetime
+import os
+import warnings
 from contextlib import contextmanager
 from glob import glob
 from pathlib import Path, PurePosixPath
@@ -5,8 +8,7 @@ from shutil import rmtree
 from tempfile import mkdtemp
 from zipfile import ZipFile
 
-from taichi.aot.utils import (produce_injected_args,
-                              produce_injected_args_from_template)
+from taichi.aot.utils import produce_injected_args, produce_injected_args_from_template
 from taichi.lang import impl, kernel_impl
 from taichi.lang.field import ScalarField
 from taichi.lang.matrix import MatrixField
@@ -23,22 +25,22 @@ class KernelTemplate:
     @staticmethod
     def keygen(v, key_p, fields):
         if isinstance(v, (int, float, bool)):
-            key_p += '=' + str(v) + ','
+            key_p += "=" + str(v) + ","
             return key_p
         for ky, val in fields:
             if val is v:
-                key_p += '=' + ky + ','
+                key_p += "=" + ky + ","
                 return key_p
-        raise RuntimeError('Arg type must be of type int/float/boolean'
-                           f' or taichi field. Type {str(type(v))}'
-                           ' is not supported')
+        raise RuntimeError(
+            "Arg type must be of type int/float/boolean" f" or taichi field. Type {str(type(v))}" " is not supported"
+        )
 
     def instantiate(self, **kwargs):
         name = self._kernel_fn.__name__
         kernel = self._kernel_fn._primal
         assert isinstance(kernel, kernel_impl.Kernel)
         injected_args = []
-        key_p = ''
+        key_p = ""
         anno_index = 0
         template_args = {}
 
@@ -55,8 +57,7 @@ class KernelTemplate:
             else:
                 injected_args.append(0)
         kernel.ensure_compiled(*injected_args)
-        self._aot_module._aot_builder.add_kernel_template(
-            name, key_p, kernel.kernel_cpp)
+        self._aot_module._aot_builder.add_kernel_template(name, key_p, kernel.kernel_cpp)
 
         # kernel AOT
         self._aot_module._kernels.append(kernel)
@@ -81,19 +82,32 @@ class Module:
         # Now the module file '/path/to/module' contains the Metal kernels
         # for running ``foo`` and ``bar``.
     """
-    def __init__(self, arch):
+
+    def __init__(self, arch=None, caps=None):
         """Creates a new AOT module instance
 
         Args:
-          arch: Target backend architecture. This is ignored for now. The AOT
-            backend still uses the one specified in :func:`~taichi.lang.init`.
+          arch: Target backend architecture. Default to the one initialized in :func:`~taichi.lang.init` if not specified.
+          caps (List[str]): Enabled device capabilities.
         """
+        if caps is None:
+            caps = []
+        curr_arch = impl.current_cfg().arch
+        if arch is None:
+            arch = curr_arch
+        elif arch != curr_arch:
+            # TODO: we'll support this eventually but not yet...
+            warnings.warn(
+                f"AOT compilation to a different arch than the current one is not yet supported, switching to {curr_arch}"
+            )
+            arch = curr_arch
+
         self._arch = arch
         self._kernels = []
         self._fields = {}
         rtm = impl.get_runtime()
         rtm._finalize_root_fb_for_aot()
-        self._aot_builder = rtm.prog.make_aot_module_builder(arch)
+        self._aot_builder = rtm.prog.make_aot_module_builder(arch, caps)
         self._content = []
 
     def add_field(self, name, field):
@@ -123,9 +137,15 @@ class Module:
             column_num = field.n
         else:
             assert isinstance(field, ScalarField)
-        self._aot_builder.add_field(name, field.snode.ptr, is_scalar,
-                                    field.dtype, field.snode.shape, row_num,
-                                    column_num)
+        self._aot_builder.add_field(
+            name,
+            field.snode.ptr,
+            is_scalar,
+            field.dtype,
+            field.snode.shape,
+            row_num,
+            column_num,
+        )
 
     def add_kernel(self, kernel_fn, template_args=None, name=None):
         """Add a taichi kernel to the AOT module.
@@ -144,8 +164,7 @@ class Module:
         kernel = kernel_fn._primal
         assert isinstance(kernel, kernel_impl.Kernel)
         if template_args is not None:
-            injected_args = produce_injected_args_from_template(
-                kernel, template_args)
+            injected_args = produce_injected_args_from_template(kernel, template_args)
         else:
             injected_args = produce_injected_args(kernel)
         kernel.ensure_compiled(*injected_args)
@@ -195,14 +214,17 @@ class Module:
         kt = KernelTemplate(kernel_fn, self)
         yield kt
 
-    def save(self, filepath, filename):
+    def save(self, filepath):
         """
         Args:
           filepath (str): path to a folder to store aot files.
-          filename (str): filename prefix for stored aot files.
         """
         filepath = str(PurePosixPath(Path(filepath)))
-        self._aot_builder.dump(filepath, filename)
+        self._aot_builder.dump(filepath, "")
+        with open(f"{filepath}/__content__", "w") as f:
+            f.write("\n".join(self._content))
+        with open(f"{filepath}/__version__", "w") as f:
+            f.write(".".join(str(x) for x in taichi.__version__))
 
     def archive(self, filepath: str):
         """
@@ -210,21 +232,20 @@ class Module:
           filepath (str): path to the stored archive of aot artifacts, MUST
             end with `.tcm`.
         """
-        assert filepath.endswith(".tcm"), \
-            "AOT module artifact archive must ends with .tcm"
+        assert filepath.endswith(".tcm"), "AOT module artifact archive must ends with .tcm"
         tcm_path = Path(filepath).absolute()
         assert tcm_path.parent.exists(), "Output directory doesn't exist"
 
         temp_dir = mkdtemp(prefix="tcm_")
         # Save first as usual.
-        self.save(temp_dir, "")
+        self.save(temp_dir)
+
+        fixed_time = datetime.datetime(2000, 12, 1).timestamp()
 
         # Package all artifacts into a zip archive and attach contend data.
         with ZipFile(tcm_path, "w") as z:
-            z.writestr("__content__", '\n'.join(self._content))
-            z.writestr("__version__",
-                       '.'.join(str(x) for x in taichi.__version__))
             for path in glob(f"{temp_dir}/*", recursive=True):
+                os.utime(path, (fixed_time, fixed_time))
                 z.write(path, Path.relative_to(Path(path), temp_dir))
 
         # Remove cached files

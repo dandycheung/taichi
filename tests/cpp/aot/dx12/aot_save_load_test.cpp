@@ -9,26 +9,25 @@
 #include "taichi/program/graph_builder.h"
 #include "taichi/runtime/dx12/aot_module_loader_impl.h"
 #include "taichi/rhi/dx12/dx12_api.h"
-#include <filesystem>
+#include "taichi/common/filesystem.hpp"
 
 using namespace taichi;
 using namespace lang;
 namespace fs = std::filesystem;
 
 [[maybe_unused]] static void aot_save(std::string &tmp_path) {
+  default_compile_config.advanced_optimization = false;
   auto program = Program(Arch::dx12);
-
-  program.this_thread_config().advanced_optimization = false;
 
   int n = 10;
 
   auto *root = new SNode(0, SNodeType::root);
-  auto *pointer = &root->dense(Axis(0), n, false);
+  auto *pointer = &root->dense(Axis(0), n);
   auto *place = &pointer->insert_children(SNodeType::place);
   place->dt = PrimitiveType::i32;
   program.add_snode_tree(std::unique_ptr<SNode>(root), /*compile_only=*/true);
 
-  auto aot_builder = program.make_aot_module_builder(Arch::dx12);
+  auto aot_builder = program.make_aot_module_builder(Arch::dx12, {});
 
   std::unique_ptr<Kernel> kernel_init, kernel_ret, kernel_simple_ret;
 
@@ -47,6 +46,7 @@ namespace fs = std::filesystem;
     kernel_simple_ret =
         std::make_unique<Kernel>(program, builder.extract_ir(), "simple_ret");
     kernel_simple_ret->insert_ret(PrimitiveType::f32);
+    kernel_simple_ret->finalize_rets();
   }
 
   {
@@ -95,6 +95,7 @@ namespace fs = std::filesystem;
 
     kernel_ret = std::make_unique<Kernel>(program, builder.extract_ir(), "ret");
     kernel_ret->insert_ret(PrimitiveType::i32);
+    kernel_ret->finalize_rets();
   }
 
   aot_builder->add("simple_ret", kernel_simple_ret.get());

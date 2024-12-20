@@ -35,6 +35,7 @@ class SNodeRwAccessorsBank {
 
     // for int32 and int64
     void write_int(const std::vector<int> &I, int64 val);
+    void write_uint(const std::vector<int> &I, uint64 val);
     int64 read_int(const std::vector<int> &I);
     uint64 read_uint(const std::vector<int> &I);
 
@@ -49,6 +50,11 @@ class SNodeRwAccessorsBank {
   }
 
   Accessors get(SNode *snode);
+
+  void remove_cached_kernels(const SNode *snode) {
+    if (snode_to_kernels_.find(snode) != snode_to_kernels_.end())
+      snode_to_kernels_.erase(snode);
+  }
 
  private:
   Program *const program_;

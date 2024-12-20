@@ -1,12 +1,15 @@
 #ifdef TI_WITH_DX11
 
 #include "taichi/rhi/dx/dx_device.h"
+#include "taichi/rhi/impl_support.h"
 
 #include "spirv_hlsl.hpp"
 #include <d3dcompiler.h>
 
 namespace taichi::lang {
 namespace directx11 {
+
+using namespace rhi_impl;
 
 #ifdef TAICHI_DX11_DEBUG_WINDOW
 IDXGISwapChain *g_swapchain = nullptr;
@@ -25,63 +28,51 @@ void check_dx_error(HRESULT hr, const char *msg) {
   }
 }
 
-std::unique_ptr<ResourceBinder::Bindings> Dx11ResourceBinder::materialize() {
+ShaderResourceSet &Dx11ResourceSet::rw_buffer(uint32_t binding,
+                                              DevicePtr ptr,
+                                              size_t size) {
   TI_NOT_IMPLEMENTED;
+  return *this;
 }
 
-void Dx11ResourceBinder::rw_buffer(uint32_t set,
-                                   uint32_t binding,
-                                   DevicePtr ptr,
-                                   size_t size) {
-  TI_NOT_IMPLEMENTED;
-}
-
-void Dx11ResourceBinder::rw_buffer(uint32_t set,
-                                   uint32_t binding,
-                                   DeviceAllocation alloc) {
+ShaderResourceSet &Dx11ResourceSet::rw_buffer(uint32_t binding,
+                                              DeviceAllocation alloc) {
   uav_binding_to_alloc_id_[binding] = alloc.alloc_id;
+  return *this;
 }
 
-void Dx11ResourceBinder::buffer(uint32_t set,
-                                uint32_t binding,
-                                DevicePtr ptr,
-                                size_t size) {
+ShaderResourceSet &Dx11ResourceSet::buffer(uint32_t binding,
+                                           DevicePtr ptr,
+                                           size_t size) {
   TI_NOT_IMPLEMENTED;
+  return *this;
 }
 
-void Dx11ResourceBinder::buffer(uint32_t set,
-                                uint32_t binding,
-                                DeviceAllocation alloc) {
+ShaderResourceSet &Dx11ResourceSet::buffer(uint32_t binding,
+                                           DeviceAllocation alloc) {
   // args_t now use constant buffers.
   // Example:
   // cbuffer args_t : register(b0)
   // { ... }
   cb_binding_to_alloc_id_[binding] = alloc.alloc_id;
+  return *this;
 }
 
-void Dx11ResourceBinder::image(uint32_t set,
-                               uint32_t binding,
-                               DeviceAllocation alloc,
-                               ImageSamplerConfig sampler_config) {
+ShaderResourceSet &Dx11ResourceSet::image(uint32_t binding,
+                                          DeviceAllocation alloc,
+                                          ImageSamplerConfig sampler_config) {
   TI_NOT_IMPLEMENTED;
+  return *this;
 }
 
-void Dx11ResourceBinder::rw_image(uint32_t set,
-                                  uint32_t binding,
-                                  DeviceAllocation alloc,
-                                  int lod) {
+ShaderResourceSet &Dx11ResourceSet::rw_image(uint32_t binding,
+                                             DeviceAllocation alloc,
+                                             int lod) {
   TI_NOT_IMPLEMENTED;
+  return *this;
 }
 
-void Dx11ResourceBinder::vertex_buffer(DevicePtr ptr, uint32_t binding) {
-  TI_NOT_IMPLEMENTED;
-}
-
-void Dx11ResourceBinder::index_buffer(DevicePtr ptr, size_t index_width) {
-  TI_NOT_IMPLEMENTED;
-}
-
-Dx11ResourceBinder::~Dx11ResourceBinder() {
+Dx11ResourceSet::~Dx11ResourceSet() {
 }
 
 Dx11CommandList::Dx11CommandList(Dx11Device *ti_device) : device_(ti_device) {
@@ -101,16 +92,21 @@ Dx11CommandList::~Dx11CommandList() {
   d3d11_deferred_context_->Release();
 }
 
-void Dx11CommandList::bind_pipeline(Pipeline *p) {
+void Dx11CommandList::bind_pipeline(Pipeline *p) noexcept {
   Dx11Pipeline *pipeline = static_cast<Dx11Pipeline *>(p);
   d3d11_deferred_context_->CSSetShader(pipeline->get_program(), nullptr, 0);
 }
 
-void Dx11CommandList::bind_resources(ResourceBinder *binder_) {
-  Dx11ResourceBinder *binder = static_cast<Dx11ResourceBinder *>(binder_);
+RhiResult Dx11CommandList::bind_shader_resources(ShaderResourceSet *res,
+                                                 int set_index) noexcept {
+  Dx11ResourceSet *set = static_cast<Dx11ResourceSet *>(res);
+  if (set_index > 0) {
+    // TODO: Add remapping?
+    return RhiResult::not_supported;
+  }
 
   // UAV
-  for (auto &[binding, alloc_id] : binder->uav_binding_to_alloc_id()) {
+  for (auto &[binding, alloc_id] : set->uav_binding_to_alloc_id()) {
     ID3D11UnorderedAccessView *uav =
         device_->alloc_id_to_uav(d3d11_deferred_context_, alloc_id);
     d3d11_deferred_context_->CSSetUnorderedAccessViews(binding, 1, &uav,
@@ -118,7 +114,7 @@ void Dx11CommandList::bind_resources(ResourceBinder *binder_) {
   }
 
   // CBV
-  for (auto &[binding, alloc_id] : binder->cb_binding_to_alloc_id()) {
+  for (auto &[binding, alloc_id] : set->cb_binding_to_alloc_id()) {
     auto cb_buffer =
         device_->alloc_id_to_cb_buffer(d3d11_deferred_context_, alloc_id);
 
@@ -126,28 +122,52 @@ void Dx11CommandList::bind_resources(ResourceBinder *binder_) {
 
     cb_slot_watermark_ = std::max(cb_slot_watermark_, int(binding));
   }
+
+  return RhiResult::success;
 }
 
-void Dx11CommandList::bind_resources(ResourceBinder *binder,
-                                     ResourceBinder::Bindings *bindings) {
+RhiResult Dx11CommandList::bind_raster_resources(
+    RasterResources *res) noexcept {
   TI_NOT_IMPLEMENTED;
 }
 
-void Dx11CommandList::buffer_barrier(DevicePtr ptr, size_t size) {
-  TI_NOT_IMPLEMENTED;
-}
-
-void Dx11CommandList::buffer_barrier(DeviceAllocation alloc) {
-  TI_NOT_IMPLEMENTED;
-}
-
-void Dx11CommandList::memory_barrier() {
+void Dx11CommandList::buffer_barrier(DevicePtr ptr, size_t size) noexcept {
+  // No-op
   // Not needed for DX11
 }
 
-void Dx11CommandList::buffer_copy(DevicePtr dst, DevicePtr src, size_t size) {
+void Dx11CommandList::buffer_barrier(DeviceAllocation alloc) noexcept {
+  // No-op
+  // Not needed for DX11
+}
+
+void Dx11CommandList::memory_barrier() noexcept {
+  // No-op
+  // Not needed for DX11
+}
+
+void Dx11CommandList::buffer_copy(DevicePtr dst,
+                                  DevicePtr src,
+                                  size_t size) noexcept {
   ID3D11Buffer *src_buf = device_->alloc_id_to_default_copy(src.alloc_id);
   ID3D11Buffer *dst_buf = device_->alloc_id_to_default_copy(dst.alloc_id);
+
+  D3D11_BUFFER_DESC src_desc;
+  D3D11_BUFFER_DESC dst_desc;
+  src_buf->GetDesc(&src_desc);
+  dst_buf->GetDesc(&dst_desc);
+
+  // Clamp to minimum available size
+  if (saturate_uadd(src.offset, size) > size_t(src_desc.ByteWidth)) {
+    size = saturate_usub(size_t(src_desc.ByteWidth), src.offset);
+  }
+  if (saturate_uadd(dst.offset, size) > size_t(dst_desc.ByteWidth)) {
+    size = saturate_usub(size_t(dst_desc.ByteWidth), dst.offset);
+  }
+
+  if (size == 0) {
+    return;
+  }
 
   D3D11_BOX box{};
   box.left = src.offset;
@@ -161,19 +181,41 @@ void Dx11CommandList::buffer_copy(DevicePtr dst, DevicePtr src, size_t size) {
                                                  src_buf, 0, &box);
 }
 
-void Dx11CommandList::buffer_fill(DevicePtr ptr, size_t size, uint32_t data) {
+void Dx11CommandList::buffer_fill(DevicePtr ptr,
+                                  size_t size,
+                                  uint32_t data) noexcept {
   ID3D11UnorderedAccessView *uav =
       device_->alloc_id_to_uav(d3d11_deferred_context_, ptr.alloc_id);
+  D3D11_BUFFER_DESC desc;
+  device_->alloc_id_to_default_copy(ptr.alloc_id)->GetDesc(&desc);
 
-  TI_ASSERT_INFO(ptr.offset == 0, "DX11 only support full resource clear");
+  // Align to 4 bytes
+  ptr.offset = ptr.offset & size_t(-4);
+
+  // Check for overflow
+  if (ptr.offset > desc.ByteWidth) {
+    return;
+  }
+
+  if (saturate_uadd(ptr.offset, size) >= desc.ByteWidth) {
+    size = kBufferSizeEntireSize;
+  }
 
   const UINT values[4] = {data, data, data, data};
+
+  if (size != kBufferSizeEntireSize) {
+    // TODO: Add DX11.1 clear regions support
+    RHI_LOG_ERROR("DX11 Backend does not support subregion clears");
+  }
+
   d3d11_deferred_context_->ClearUnorderedAccessViewUint(uav, values);
 
   // FIXME: what if the default is not a raw buffer?
 }
 
-void Dx11CommandList::dispatch(uint32_t x, uint32_t y, uint32_t z) {
+RhiResult Dx11CommandList::dispatch(uint32_t x,
+                                    uint32_t y,
+                                    uint32_t z) noexcept {
   // Set SPIRV_Cross_NumWorkgroups's CB slot based on the watermark
   auto cb_slot = cb_slot_watermark_ + 1;
   auto spirv_cross_numworkgroups_cb =
@@ -186,6 +228,8 @@ void Dx11CommandList::dispatch(uint32_t x, uint32_t y, uint32_t z) {
   cb_slot_watermark_ = -1;
 
   d3d11_deferred_context_->Dispatch(x, y, z);
+
+  return RhiResult::success;
 }
 
 void Dx11CommandList::begin_renderpass(int x0,
@@ -362,8 +406,8 @@ HRESULT create_compute_device(ID3D11Device **out_device,
 #endif
 
     if (FAILED(hr) || device == nullptr) {
-      TI_WARN("Failed to create D3D11 device with type {}: {}\n", driver_type,
-              driver_type_names[attempt_idx]);
+      TI_WARN("Failed to create D3D11 device with type {}: {}\n",
+              int(driver_type), driver_type_names[attempt_idx]);
       continue;
     }
 
@@ -515,7 +559,10 @@ Dx11Device::Dx11Device() {
   if (kD3d11DebugEnabled) {
     info_queue_ = std::make_unique<Dx11InfoQueue>(device_);
   }
-  set_cap(DeviceCapability::spirv_version, 0x10300);
+
+  DeviceCapabilityConfig caps{};
+  caps.set(DeviceCapability::spirv_version, 0x10300);
+  set_caps(std::move(caps));
 
   stream_ = std::make_unique<Dx11Stream>(this);
 }
@@ -675,10 +722,11 @@ void Dx11Device::BufferTuple::copy_back(ID3D11Buffer *buffer,
   context->CopyResource(get_default_copy(device), buffer);
 }
 
-DeviceAllocation Dx11Device::allocate_memory(const AllocParams &params) {
-  DeviceAllocation alloc;
-  alloc.device = this;
-  alloc.alloc_id = alloc_serial_++;
+RhiResult Dx11Device::allocate_memory(const AllocParams &params,
+                                      DeviceAllocation *out_devalloc) {
+  *out_devalloc = DeviceAllocation{};
+  out_devalloc->device = this;
+  out_devalloc->alloc_id = alloc_serial_++;
 
   BufferTuple tuple;
   tuple.cpu_read = params.host_read;
@@ -693,9 +741,9 @@ DeviceAllocation Dx11Device::allocate_memory(const AllocParams &params) {
   } else {
     tuple.default_copy = 2;
   }
-  alloc_id_to_buffer_[alloc.alloc_id] = std::move(tuple);
+  alloc_id_to_buffer_[out_devalloc->alloc_id] = std::move(tuple);
 
-  return alloc;
+  return RhiResult::success;
 }
 
 void Dx11Device::dealloc_memory(DeviceAllocation handle) {
@@ -703,17 +751,90 @@ void Dx11Device::dealloc_memory(DeviceAllocation handle) {
   alloc_id_to_buffer_.erase(alloc_id);
 }
 
-std::unique_ptr<Pipeline> Dx11Device::create_pipeline(
-    const PipelineSourceDesc &src,
-    std::string name) {
-  return std::make_unique<Dx11Pipeline>(src, name, this);
+RhiResult Dx11Device::upload_data(DevicePtr *device_ptr,
+                                  const void **data,
+                                  size_t *size,
+                                  int num_alloc) noexcept {
+  if (!device_ptr || !data || !size) {
+    return RhiResult::invalid_usage;
+  }
+
+  for (int i = 0; i < num_alloc; i++) {
+    if (device_ptr[i].device != this || !data[i]) {
+      return RhiResult::invalid_usage;
+    }
+
+    D3D11_BOX box{};
+    box.left = device_ptr[i].offset;
+    box.right = size[i];
+    box.top = 0;
+    box.bottom = 1;  // 1 past the end!
+    box.front = 0;
+    box.back = 1;
+
+    context_->UpdateSubresource(
+        alloc_id_to_buffer_[device_ptr[i].alloc_id].get_default_copy(device_),
+        0, &box, data[i], size[i], 0);
+  }
+
+  return RhiResult::success;
 }
 
-void *Dx11Device::map_range(DevicePtr ptr, uint64_t size) {
-  return static_cast<uint8_t *>(map(DeviceAllocation(ptr))) + ptr.offset;
+RhiResult Dx11Device::readback_data(
+    DevicePtr *device_ptr,
+    void **data,
+    size_t *size,
+    int num_alloc,
+    const std::vector<StreamSemaphore> &wait_sema) noexcept {
+  if (!device_ptr || !data || !size) {
+    return RhiResult::invalid_usage;
+  }
+
+  for (int i = 0; i < num_alloc; i++) {
+    if (device_ptr[i].device != this || !data[i]) {
+      return RhiResult::invalid_usage;
+    }
+
+    ID3D11Buffer *buffer =
+        alloc_id_to_buffer_[device_ptr[i].alloc_id].get_staging(context_,
+                                                                device_);
+    if (buffer == nullptr) {
+      return RhiResult::error;
+    }
+
+    D3D11_MAPPED_SUBRESOURCE mapped;
+    if (!SUCCEEDED(context_->Map(buffer, 0, D3D11_MAP_READ, 0, &mapped))) {
+      return RhiResult::error;
+    }
+    memcpy(data[i], mapped.pData, size[i]);
+    context_->Unmap(buffer, 0);
+  }
+
+  return RhiResult::success;
 }
 
-void *Dx11Device::map(DeviceAllocation alloc) {
+RhiResult Dx11Device::create_pipeline(Pipeline **out_pipeline,
+                                      const PipelineSourceDesc &src,
+                                      std::string name,
+                                      PipelineCache *cache) noexcept {
+  try {
+    *out_pipeline = new Dx11Pipeline(src, name, this);
+  } catch (std::bad_alloc &) {
+    *out_pipeline = nullptr;
+    return RhiResult::out_of_memory;
+  }
+  return RhiResult::success;
+}
+
+RhiResult Dx11Device::map_range(DevicePtr ptr,
+                                uint64_t size,
+                                void **mapped_ptr) {
+  RhiResult res = Dx11Device::map(DeviceAllocation(ptr), mapped_ptr);
+  *mapped_ptr = static_cast<uint8_t *>(*mapped_ptr) + ptr.offset;
+  return res;
+}
+
+RhiResult Dx11Device::map(DeviceAllocation alloc, void **mapped_ptr) {
   uint32_t alloc_id = alloc.alloc_id;
   BufferTuple &buf_tuple = alloc_id_to_buffer_[alloc_id];
   ID3D11Buffer *buf = nullptr;
@@ -740,7 +861,9 @@ void *Dx11Device::map(DeviceAllocation alloc) {
 
   buf_tuple.mapped = buf;
 
-  return mapped.pData;
+  *mapped_ptr = mapped.pData;
+
+  return RhiResult::success;
 }
 
 void Dx11Device::unmap(DevicePtr ptr) {
@@ -876,8 +999,9 @@ Dx11Stream::Dx11Stream(Dx11Device *device_) : device_(device_) {
 Dx11Stream::~Dx11Stream() {
 }
 
-std::unique_ptr<CommandList> Dx11Stream::new_command_list() {
-  return std::make_unique<Dx11CommandList>(device_);
+RhiResult Dx11Stream::new_command_list(CommandList **out_cmdlist) noexcept {
+  *out_cmdlist = new Dx11CommandList(device_);
+  return RhiResult::success;
 }
 
 StreamSemaphore Dx11Stream::submit(
@@ -944,10 +1068,6 @@ Dx11Pipeline::Dx11Pipeline(const PipelineSourceDesc &desc,
 }
 
 Dx11Pipeline::~Dx11Pipeline() {
-}
-
-ResourceBinder *Dx11Pipeline::resource_binder() {
-  return &binder_;
 }
 
 }  // namespace directx11

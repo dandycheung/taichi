@@ -3,7 +3,9 @@
 #include <string>
 #include <unordered_map>
 #include "taichi/ir/type.h"
+#include "taichi/program/callable.h"
 #include "taichi/aot/module_data.h"
+#include "taichi/program/compile_config.h"
 #define TI_RUNTIME_HOST
 #include "taichi/program/context.h"
 #undef TI_RUNTIME_HOST
@@ -15,6 +17,8 @@ namespace taichi::lang {
 class AotModuleBuilder;
 class Ndarray;
 class Texture;
+class Matrix;
+class Kernel;
 
 namespace aot {
 // Currently only scalar, matrix and ndarray are supported.
@@ -113,6 +117,10 @@ struct TI_DLL_EXPORT IValue {
     return IValue(reinterpret_cast<intptr_t>(&tex), ArgKind::kTexture);
   }
 
+  static IValue create(const Matrix &matrix) {
+    return IValue(reinterpret_cast<intptr_t>(&matrix), ArgKind::kMatrix);
+  }
+
   template <typename T,
             typename = std::enable_if_t<!std::is_same<T, Ndarray>::value, void>>
   static IValue create(T v) {
@@ -125,7 +133,7 @@ struct TI_DLL_EXPORT IValue {
   }
 };
 
-class TI_DLL_EXPORT Kernel {
+class TI_DLL_EXPORT Kernel : public CallableBase {
  public:
   // Rule of 5 to make MSVC happy
   Kernel() = default;
@@ -142,13 +150,14 @@ class TI_DLL_EXPORT Kernel {
    *
    * @param ctx Host context
    */
-  virtual void launch(RuntimeContext *ctx) = 0;
+  virtual void launch(LaunchContextBuilder &ctx) = 0;
 };
 
 struct CompiledDispatch {
   std::string kernel_name;
   std::vector<Arg> symbolic_args;
   Kernel *compiled_kernel{nullptr};
+  taichi::lang::Kernel *ti_kernel{nullptr};
 
   TI_IO_DEF(kernel_name, symbolic_args);
 };
@@ -156,11 +165,18 @@ struct CompiledDispatch {
 struct TI_DLL_EXPORT CompiledGraph {
   std::vector<CompiledDispatch> dispatches;
   std::unordered_map<std::string, aot::Arg> args;
-  RuntimeContext ctx_;
 
   void run(const std::unordered_map<std::string, IValue> &args) const;
+  void jit_run(const CompileConfig &compile_config,
+               const std::unordered_map<std::string, IValue> &args) const;
 
   TI_IO_DEF(dispatches);
+
+ private:
+  static void init_runtime_context(
+      const std::vector<Arg> &paramter_list,
+      const std::unordered_map<std::string, IValue> &args,
+      LaunchContextBuilder &ctx);
 };
 
 }  // namespace aot

@@ -8,7 +8,7 @@ namespace taichi::lang {
 JITModule *JITSessionCUDA ::add_module(std::unique_ptr<llvm::Module> M,
                                        int max_reg) {
   auto ptx = compile_module_to_ptx(M);
-  if (this->config_->print_kernel_nvptx) {
+  if (this->config_.print_kernel_asm) {
     static FileSequenceWriter writer("taichi_kernel_nvptx_{:04d}.ptx",
                                      "module NVPTX");
     writer.write(ptx);
@@ -53,18 +53,20 @@ std::string convert(std::string new_name) {
   // Evil C++ mangling on Windows will lead to "unsupported characters in
   // symbol" error in LLVM PTX printer. Convert here.
   for (int i = 0; i < (int)new_name.size(); i++) {
-    if (new_name[i] == '@')
+    if (new_name[i] == '@') {
       new_name.replace(i, 1, "_at_");
-    if (new_name[i] == '?')
+    } else if (new_name[i] == '?') {
       new_name.replace(i, 1, "_qm_");
-    if (new_name[i] == '$')
+    } else if (new_name[i] == '$') {
       new_name.replace(i, 1, "_dl_");
-    if (new_name[i] == '<')
+    } else if (new_name[i] == '<') {
       new_name.replace(i, 1, "_lb_");
-    if (new_name[i] == '>')
+    } else if (new_name[i] == '>') {
       new_name.replace(i, 1, "_rb_");
-    TI_ASSERT(std::isalpha(new_name[i]) || std::isdigit(new_name[i]) ||
-              new_name[i] == '_' || new_name[i] == '.');
+    } else if (!std::isalpha(new_name[i]) && !std::isdigit(new_name[i]) &&
+               new_name[i] != '_' && new_name[i] != '.') {
+      new_name.replace(i, 1, "_xx_");
+    }
   }
   if (!new_name.empty())
     TI_ASSERT(isalpha(new_name[0]) || new_name[0] == '_' || new_name[0] == '.');
@@ -77,12 +79,12 @@ std::string JITSessionCUDA::compile_module_to_ptx(
   // Part of this function is borrowed from Halide::CodeGen_PTX_Dev.cpp
   if (llvm::verifyModule(*module, &llvm::errs())) {
     module->print(llvm::errs(), nullptr);
-    TI_WARN("Module broken");
+    TI_ERROR("LLVM Module broken");
   }
 
   using namespace llvm;
 
-  if (this->config_->print_kernel_llvm_ir) {
+  if (this->config_.print_kernel_llvm_ir) {
     static FileSequenceWriter writer("taichi_kernel_cuda_llvm_ir_{:04d}.ll",
                                      "unoptimized LLVM IR (CUDA)");
     writer.write(module.get());
@@ -103,11 +105,7 @@ std::string JITSessionCUDA::compile_module_to_ptx(
   TI_ERROR_UNLESS(target, err_str);
 
   TargetOptions options;
-#ifndef TI_LLVM_15
-  // PrintMachineCode is removed in https://reviews.llvm.org/D83275.
-  options.PrintMachineCode = 0;
-#endif
-  if (this->config_->fast_math) {
+  if (this->config_.fast_math) {
     options.AllowFPOpFusion = FPOpFusion::Fast;
     // See NVPTXISelLowering.cpp
     // Setting UnsafeFPMath true will result in approximations such as
@@ -124,10 +122,6 @@ std::string JITSessionCUDA::compile_module_to_ptx(
   options.HonorSignDependentRoundingFPMathOption = 0;
   options.NoZerosInBSS = 0;
   options.GuaranteedTailCallOpt = 0;
-#ifndef TI_LLVM_15
-  // StackAlignmentOverride is removed in https://reviews.llvm.org/D103048.
-  options.StackAlignmentOverride = 0;
-#endif
 
   std::unique_ptr<TargetMachine> target_machine(target->createTargetMachine(
       triple.str(), CUDAContext::get_instance().get_mcpu(), cuda_mattrs(),
@@ -173,7 +167,14 @@ std::string JITSessionCUDA::compile_module_to_ptx(
 
   if (kFTZDenorms) {
     for (llvm::Function &fn : *module) {
-      fn.addFnAttr("nvptx-f32ftz", "true");
+      /* nvptx-f32ftz was deprecated.
+       *
+       * https://github.com/llvm/llvm-project/commit/a4451d88ee456304c26d552749aea6a7f5154bde#diff-6fda74ef428299644e9f49a2b0994c0d850a760b89828f655030a114060d075a
+       */
+      fn.addFnAttr("denormal-fp-math-f32", "preserve-sign");
+
+      // Use unsafe fp math for sqrt.approx instead of sqrt.rn
+      fn.addFnAttr("unsafe-fp-math", "true");
     }
   }
 
@@ -224,7 +225,7 @@ std::string JITSessionCUDA::compile_module_to_ptx(
     module_pass_manager.run(*module);
   }
 
-  if (this->config_->print_kernel_llvm_ir_optimized) {
+  if (this->config_.print_kernel_llvm_ir_optimized) {
     static FileSequenceWriter writer(
         "taichi_kernel_cuda_llvm_ir_optimized_{:04d}.ll",
         "optimized LLVM IR (CUDA)");
@@ -240,19 +241,17 @@ std::string JITSessionCUDA::compile_module_to_ptx(
 
 std::unique_ptr<JITSession> create_llvm_jit_session_cuda(
     TaichiLLVMContext *tlctx,
-    CompileConfig *config,
+    const CompileConfig &config,
     Arch arch) {
   TI_ASSERT(arch == Arch::cuda);
   // https://docs.nvidia.com/cuda/nvvm-ir-spec/index.html#data-layout
-  auto data_layout = llvm::DataLayout(
-      "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-"
-      "f64:64:64-v16:16:16-v32:32:32-v64:64:64-v128:128:128-n16:32:64");
+  auto data_layout = TaichiLLVMContext::get_data_layout(arch);
   return std::make_unique<JITSessionCUDA>(tlctx, config, data_layout);
 }
 #else
 std::unique_ptr<JITSession> create_llvm_jit_session_cuda(
     TaichiLLVMContext *tlctx,
-    CompileConfig *config,
+    const CompileConfig &config,
     Arch arch) {
   TI_NOT_IMPLEMENTED
 }

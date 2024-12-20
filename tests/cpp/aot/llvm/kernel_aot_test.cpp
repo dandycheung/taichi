@@ -2,12 +2,17 @@
 
 #include "taichi/program/kernel_profiler.h"
 #include "taichi/runtime/llvm/llvm_runtime_executor.h"
-#include "taichi/system/memory_pool.h"
-#include "taichi/runtime/cpu/aot_module_loader_impl.h"
-#include "taichi/runtime/cuda/aot_module_loader_impl.h"
+#include "taichi/runtime/llvm/llvm_aot_module_loader.h"
+#include "taichi/runtime/cpu/kernel_launcher.h"
 #include "taichi/runtime/dx12/aot_module_loader_impl.h"
+
+#ifdef TI_WITH_CUDA
+
 #include "taichi/rhi/cuda/cuda_driver.h"
 #include "taichi/platform/cuda/detect_cuda.h"
+#include "taichi/runtime/cuda/kernel_launcher.h"
+
+#endif
 
 #define TI_RUNTIME_HOST
 #include "taichi/program/context.h"
@@ -21,42 +26,47 @@ TEST(LlvmAotTest, CpuKernel) {
   cfg.kernel_profiler = false;
   constexpr KernelProfilerBase *kNoProfiler = nullptr;
   LlvmRuntimeExecutor exec{cfg, kNoProfiler};
-  auto *compute_device = exec.get_compute_device();
   // Must have handled all the arch fallback logic by this point.
-  auto memory_pool = std::make_unique<MemoryPool>(cfg.arch, compute_device);
   uint64 *result_buffer{nullptr};
-  exec.materialize_runtime(memory_pool.get(), kNoProfiler, &result_buffer);
+  exec.materialize_runtime(kNoProfiler, &result_buffer);
 
   constexpr int kArrLen = 32;
   constexpr int kArrBytes = kArrLen * sizeof(int32_t);
-  auto arr_devalloc = exec.allocate_memory_ndarray(kArrBytes, result_buffer);
+  auto arr_devalloc = exec.allocate_memory_on_device(kArrBytes, result_buffer);
   Ndarray arr = Ndarray(arr_devalloc, PrimitiveType::i32, {kArrLen});
 
-  cpu::AotModuleParams aot_params;
+  LLVM::AotModuleParams aot_params;
   const auto folder_dir = getenv("TAICHI_AOT_FOLDER_PATH");
 
   std::stringstream aot_mod_ss;
   aot_mod_ss << folder_dir;
   aot_params.module_path = aot_mod_ss.str();
   aot_params.executor_ = &exec;
-  auto mod = cpu::make_aot_module(aot_params);
+  aot_params.kernel_launcher =
+      std::make_unique<cpu::KernelLauncher>(cpu::KernelLauncher::Config{&exec});
+  std::unique_ptr<aot::Module> mod =
+      LLVM::make_aot_module(std::move(aot_params));
+
   auto *k_run = mod->get_kernel("run");
 
-  RuntimeContext ctx;
-  ctx.runtime = exec.get_llvm_runtime();
-  ctx.set_arg(0, /*v=*/0);
-  ctx.set_arg_ndarray(/*arg_id=*/1, arr.get_device_allocation_ptr_as_int(),
-                      /*shape=*/arr.shape);
-  k_run->launch(&ctx);
+  LaunchContextBuilder builder(k_run);
+  builder.set_arg({0}, /*v=*/0);
+  builder.set_arg_ndarray(/*arg_id=*/{1}, arr);
+  std::vector<int> vec = {1, 2, 3};
+  for (int i = 0; i < vec.size(); ++i) {
+    builder.set_struct_arg(/*arg_indices=*/{2, i}, vec[i]);
+  }
+  k_run->launch(builder);
 
-  auto *data = reinterpret_cast<int32_t *>(
-      exec.get_ndarray_alloc_info_ptr(arr_devalloc));
+  auto *data =
+      reinterpret_cast<int32_t *>(exec.get_device_alloc_info_ptr(arr_devalloc));
   for (int i = 0; i < kArrLen; ++i) {
-    EXPECT_EQ(data[i], i);
+    EXPECT_EQ(data[i], i + vec[0]);
   }
 }
 
 TEST(LlvmAotTest, CudaKernel) {
+#ifdef TI_WITH_CUDA
   if (is_cuda_api_available()) {
     CompileConfig cfg;
     cfg.arch = Arch::cuda;
@@ -66,40 +76,47 @@ TEST(LlvmAotTest, CudaKernel) {
 
     // Must have handled all the arch fallback logic by this point.
     uint64 *result_buffer{nullptr};
-    exec.materialize_runtime(nullptr, kNoProfiler, &result_buffer);
+    exec.materialize_runtime(kNoProfiler, &result_buffer);
 
     constexpr int kArrLen = 32;
     constexpr int kArrBytes = kArrLen * sizeof(int32_t);
-    auto arr_devalloc = exec.allocate_memory_ndarray(kArrBytes, result_buffer);
+    auto arr_devalloc =
+        exec.allocate_memory_on_device(kArrBytes, result_buffer);
     Ndarray arr = Ndarray(arr_devalloc, PrimitiveType::i32, {kArrLen});
 
-    cuda::AotModuleParams aot_params;
+    LLVM::AotModuleParams aot_params;
     const auto folder_dir = getenv("TAICHI_AOT_FOLDER_PATH");
 
     std::stringstream aot_mod_ss;
     aot_mod_ss << folder_dir;
     aot_params.module_path = aot_mod_ss.str();
     aot_params.executor_ = &exec;
-    auto mod = cuda::make_aot_module(aot_params);
+    aot_params.kernel_launcher = std::make_unique<cuda::KernelLauncher>(
+        cuda::KernelLauncher::Config{&exec});
+    auto mod = LLVM::make_aot_module(std::move(aot_params));
+
     auto *k_run = mod->get_kernel("run");
-    RuntimeContext ctx;
-    ctx.runtime = exec.get_llvm_runtime();
-    ctx.set_arg(0, /*v=*/0);
-    ctx.set_arg_ndarray(/*arg_id=*/1, arr.get_device_allocation_ptr_as_int(),
-                        /*shape=*/arr.shape);
-    k_run->launch(&ctx);
+    LaunchContextBuilder builder(k_run);
+    builder.set_arg({0}, /*v=*/0);
+    builder.set_arg_ndarray(/*arg_id=*/{1}, arr);
+    std::vector<int> vec = {1, 2, 3};
+    for (int i = 0; i < vec.size(); ++i) {
+      builder.set_struct_arg(/*arg_indices=*/{2, i}, vec[i]);
+    }
+    k_run->launch(builder);
 
     auto *data = reinterpret_cast<int32_t *>(
-        exec.get_ndarray_alloc_info_ptr(arr_devalloc));
+        exec.get_device_alloc_info_ptr(arr_devalloc));
 
     std::vector<int32_t> cpu_data(kArrLen);
     CUDADriver::get_instance().memcpy_device_to_host(
         (void *)cpu_data.data(), (void *)data, kArrLen * sizeof(int32_t));
 
     for (int i = 0; i < kArrLen; ++i) {
-      EXPECT_EQ(cpu_data[i], i);
+      EXPECT_EQ(cpu_data[i], i + vec[0]);
     }
   }
+#endif
 }
 
 #ifdef TI_WITH_DX12

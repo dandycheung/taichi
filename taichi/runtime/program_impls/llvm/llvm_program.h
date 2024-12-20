@@ -6,9 +6,9 @@
 #include "taichi/runtime/llvm/llvm_offline_cache.h"
 #include "taichi/program/compile_config.h"
 #include "taichi/runtime/llvm/llvm_runtime_executor.h"
-#include "taichi/system/memory_pool.h"
 #include "taichi/program/program_impl.h"
 #include "taichi/program/parallel_executor.h"
+#include "taichi/util/bit.h"
 #define TI_RUNTIME_HOST
 #include "taichi/program/context.h"
 #undef TI_RUNTIME_HOST
@@ -26,6 +26,10 @@ namespace cuda {
 class CudaDevice;
 }  // namespace cuda
 
+namespace amdgpu {
+class AmdgpuDevice;
+}  // namespace amdgpu
+
 namespace cpu {
 class CpuDevice;
 }  // namespace cpu
@@ -38,21 +42,12 @@ class LlvmProgramImpl : public ProgramImpl {
   /* ---- JIT-Compilation Interfaces ---- */
   /* ------------------------------------ */
 
-  // TODO(zhanlue): compile-time runtime split for LLVM::CodeGen
-  // For now, compile = codegen + convert
-  FunctionType compile(Kernel *kernel, OffloadedStmt *offloaded) override;
-
   void compile_snode_tree_types(SNodeTree *tree) override;
 
   // TODO(zhanlue): refactor materialize_snode_tree()
   // materialize_snode_tree = compile_snode_tree_types +
   // initialize_llvm_runtime_snodes It's a 2-in-1 interface
   void materialize_snode_tree(SNodeTree *tree, uint64 *result_buffer) override;
-
-  void cache_kernel(const std::string &kernel_key,
-                    const LLVMCompiledKernel &data,
-                    std::vector<LlvmLaunchArgInfo> &&args);
-  ;
 
   void cache_field(int snode_tree_id,
                    int root_id,
@@ -68,11 +63,8 @@ class LlvmProgramImpl : public ProgramImpl {
   std::unique_ptr<StructCompiler> compile_snode_tree_types_impl(
       SNodeTree *tree);
 
-  std::unique_ptr<aot::Kernel> make_aot_kernel(Kernel &kernel) override;
-
-  std::unique_ptr<AotModuleBuilder> make_aot_module_builder() override;
-
-  void dump_cache_data_to_disk() override;
+  std::unique_ptr<AotModuleBuilder> make_aot_module_builder(
+      const DeviceCapabilityConfig &caps) override;
 
   /* -------------------------------- */
   /* ---- JIT-Runtime Interfaces ---- */
@@ -97,14 +89,16 @@ class LlvmProgramImpl : public ProgramImpl {
   /**
    * Initializes the runtime system for LLVM based backends.
    */
-  void materialize_runtime(MemoryPool *memory_pool,
-                           KernelProfilerBase *profiler,
+  void materialize_runtime(KernelProfilerBase *profiler,
                            uint64 **result_buffer_ptr) override {
-    runtime_exec_->materialize_runtime(memory_pool, profiler,
-                                       result_buffer_ptr);
+    runtime_exec_->materialize_runtime(profiler, result_buffer_ptr);
   }
 
   void destroy_snode_tree(SNodeTree *snode_tree) override {
+    // Invalid corresponding snode tree cache
+    if (cache_data_->fields.find(snode_tree->id()) != cache_data_->fields.end())
+      cache_data_->fields.erase(snode_tree->id());
+
     return runtime_exec_->destroy_snode_tree(snode_tree);
   }
 
@@ -117,8 +111,8 @@ class LlvmProgramImpl : public ProgramImpl {
     runtime_exec_->finalize();
   }
 
-  uint64_t *get_ndarray_alloc_info_ptr(const DeviceAllocation &alloc) override {
-    return runtime_exec_->get_ndarray_alloc_info_ptr(alloc);
+  uint64_t *get_device_alloc_info_ptr(const DeviceAllocation &alloc) override {
+    return runtime_exec_->get_device_alloc_info_ptr(alloc);
   }
 
   void fill_ndarray(const DeviceAllocation &alloc,
@@ -127,13 +121,9 @@ class LlvmProgramImpl : public ProgramImpl {
     return runtime_exec_->fill_ndarray(alloc, size, data);
   }
 
-  void prepare_runtime_context(RuntimeContext *ctx) override {
-    runtime_exec_->prepare_runtime_context(ctx);
-  }
-
-  DeviceAllocation allocate_memory_ndarray(std::size_t alloc_size,
-                                           uint64 *result_buffer) override {
-    return runtime_exec_->allocate_memory_ndarray(alloc_size, result_buffer);
+  DeviceAllocation allocate_memory_on_device(std::size_t alloc_size,
+                                             uint64 *result_buffer) override {
+    return runtime_exec_->allocate_memory_on_device(alloc_size, result_buffer);
   }
 
   Device *get_compute_device() override {
@@ -148,14 +138,6 @@ class LlvmProgramImpl : public ProgramImpl {
       uint64 *result_buffer) {
     runtime_exec_->initialize_llvm_runtime_snodes(field_cache_data,
                                                   result_buffer);
-  }
-
-  void initialize_host() {
-    runtime_exec_->initialize_host();
-  }
-
-  void maybe_initialize_cuda_llvm_context() {
-    runtime_exec_->maybe_initialize_cuda_llvm_context();
   }
 
   uint64 fetch_result_uint64(int i, uint64 *result_buffer) override {
@@ -180,8 +162,8 @@ class LlvmProgramImpl : public ProgramImpl {
     runtime_exec_->print_memory_profiler_info(snode_trees_, result_buffer);
   }
 
-  TaichiLLVMContext *get_llvm_context(Arch arch) {
-    return runtime_exec_->get_llvm_context(arch);
+  TaichiLLVMContext *get_llvm_context() {
+    return runtime_exec_->get_llvm_context();
   }
 
   void synchronize() override {
@@ -224,14 +206,6 @@ class LlvmProgramImpl : public ProgramImpl {
     return runtime_exec_->get_snode_tree_device_ptr(tree_id);
   }
 
-  cuda::CudaDevice *cuda_device() {
-    return runtime_exec_->cuda_device();
-  }
-
-  cpu::CpuDevice *cpu_device() {
-    return runtime_exec_->cpu_device();
-  }
-
   LlvmDevice *llvm_device() {
     return runtime_exec_->llvm_device();
   }
@@ -240,8 +214,18 @@ class LlvmProgramImpl : public ProgramImpl {
     return runtime_exec_.get();
   }
 
-  const std::unique_ptr<LlvmOfflineCacheFileReader> &get_cache_reader() {
-    return cache_reader_;
+  std::string get_kernel_return_data_layout() override {
+    return get_llvm_context()->get_data_layout_string();
+  };
+
+  std::string get_kernel_argument_data_layout() override {
+    return get_llvm_context()->get_data_layout_string();
+  };
+
+  std::pair<const StructType *, size_t> get_struct_type_with_data_layout(
+      const StructType *old_ty,
+      const std::string &layout) override {
+    return get_llvm_context()->get_struct_type_with_data_layout(old_ty, layout);
   }
 
   // TODO(zhanlue): Rearrange llvm::Context's ownership
@@ -281,19 +265,19 @@ class LlvmProgramImpl : public ProgramImpl {
     // 1. Destructs cache_data_
     cache_data_.reset();
 
-    // 2. Destructs cache_reader_
-    cache_reader_.reset();
-
-    // 3. Destructs runtime_exec_
+    // 2. Destructs runtime_exec_
     runtime_exec_.reset();
   }
   ParallelExecutor compilation_workers;  // parallel compilation
+
+ protected:
+  std::unique_ptr<KernelCompiler> make_kernel_compiler() override;
+  std::unique_ptr<KernelLauncher> make_kernel_launcher() override;
 
  private:
   std::size_t num_snode_trees_processed_{0};
   std::unique_ptr<LlvmRuntimeExecutor> runtime_exec_;
   std::unique_ptr<LlvmOfflineCache> cache_data_;
-  std::unique_ptr<LlvmOfflineCacheFileReader> cache_reader_;
 };
 
 LlvmProgramImpl *get_llvm_program(Program *prog);

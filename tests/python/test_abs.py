@@ -76,5 +76,15 @@ def test_abs_i64():
     def foo(x: ti.i64) -> ti.i64:
         return abs(x)
 
-    for x in [-2**40, 0, 2**40]:
+    for x in [-(2**40), 0, 2**40]:
+        assert foo(x) == abs(x)
+
+
+@test_utils.test()
+def test_abs_u32():
+    @ti.kernel
+    def foo(x: ti.u32) -> ti.u32:
+        return abs(x)
+
+    for x in [0, 2**20]:
         assert foo(x) == abs(x)

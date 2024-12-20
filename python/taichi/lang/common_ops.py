@@ -1,29 +1,16 @@
-import warnings
-
 from taichi.lang import ops
 from taichi.lang.util import in_python_scope
+from taichi.types import primitive_types
+from typing import TYPE_CHECKING
 
 
 class TaichiOperations:
     """The base class of taichi operations of expressions. Subclasses: :class:`~taichi.lang.expr.Expr`, :class:`~taichi.lang.matrix.Matrix`"""
 
-    __deprecated_atomic_ops__ = {
-        "atomic_add": "_atomic_add",
-        "atomic_and": "_atomic_and",
-        "atomic_or": "_atomic_or",
-        "atomic_sub": "_atomic_sub",
-        "atomic_xor": "_atomic_xor",
-    }
-
-    def __getattr__(self, item):
-        if item in TaichiOperations.__deprecated_atomic_ops__:
-            warnings.warn(
-                f"a.{item}(b) is deprecated. Please use ti.{item}(a, b) instead.",
-                DeprecationWarning)
-            return getattr(self,
-                           TaichiOperations.__deprecated_atomic_ops__[item])
-        raise AttributeError(
-            f"'{type(self).__name__}' object has no attribute '{item}'")
+    if TYPE_CHECKING:
+        # Make pylint happy
+        def __getattr__(self, item):
+            pass
 
     def __neg__(self):
         return ops.neg(self)
@@ -137,6 +124,16 @@ class TaichiOperations:
             :class:`~taichi.lang.expr.Expr`: The computing expression of atomic add."""
         return ops.atomic_add(self, other)
 
+    def _atomic_mul(self, other):
+        """Return the new expression of computing atomic mul between self and a given operand.
+
+        Args:
+            other (Any): Given operand.
+
+        Returns:
+            :class:`~taichi.lang.expr.Expr`: The computing expression of atomic mul."""
+        return ops.atomic_mul(self, other)
+
     def _atomic_sub(self, other):
         """Return the new expression of computing atomic sub between self and a given operand.
 
@@ -182,6 +179,12 @@ class TaichiOperations:
         if in_python_scope():
             return NotImplemented
         self._atomic_add(other)
+        return self
+
+    def __imul__(self, other):
+        if in_python_scope():
+            return NotImplemented
+        self._atomic_mul(other)
         return self
 
     def __isub__(self, other):
@@ -268,35 +271,38 @@ class TaichiOperations:
         Args:
             x (Any): Given operand.
             op (str): The name of operator."""
-        if op == 'Add':
+        if op == "Add":
             self += x
-        elif op == 'Sub':
+        elif op == "Sub":
             self -= x
-        elif op == 'Mult':
+        elif op == "Mult":
             self *= x
-        elif op == 'Div':
+        elif op == "Div":
             self /= x
-        elif op == 'FloorDiv':
+        elif op == "FloorDiv":
             self //= x
-        elif op == 'Mod':
+        elif op == "Mod":
             self %= x
-        elif op == 'BitAnd':
+        elif op == "BitAnd":
             self &= x
-        elif op == 'BitOr':
+        elif op == "BitOr":
             self |= x
-        elif op == 'BitXor':
+        elif op == "BitXor":
             self ^= x
-        elif op == 'RShift':
+        elif op == "RShift":
             self >>= x
-        elif op == 'LShift':
+        elif op == "LShift":
             self <<= x
-        elif op == 'Pow':
+        elif op == "Pow":
             self **= x
         else:
             assert False, op
 
     def __ti_int__(self):
         return ops.cast(self, int)
+
+    def __ti_bool__(self):
+        return ops.cast(self, primitive_types.u1)
 
     def __ti_float__(self):
         return ops.cast(self, float)

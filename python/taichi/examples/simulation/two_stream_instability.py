@@ -32,7 +32,7 @@ v_x_pos2 = ti.Vector.field(2, ti.f32, int(np / 2))
 def initialize():
     for p in x:
         x[p].x = (p + 1) * L / np
-        v[p].x = vt * ti.randn() + (-1)**p * vb  # two streams
+        v[p].x = vt * ti.randn() + (-1) ** p * vb  # two streams
 
 
 @ti.kernel
@@ -48,21 +48,26 @@ def substep():
         base = (x[p] * inv_dx - 0.5).cast(int)
         fx = x[p] * inv_dx - 0.5 - base.cast(float)
         rho[base] += (1.0 - fx) * q * inv_dx
-        rho[base + 1] += fx * q * inv_dx
+        if base[0] < ng - 1:
+            rho[base + 1] += fx * q * inv_dx
     e.fill(0.0)
     ti.loop_config(serialize=True)
     for i in range(ng):  # compute electric fields
-        e[i] = e[i - 1] + (rho[i - 1] + rho[i]) * dx * 0.5
+        if i == 0:
+            e[i] = rho[i] * dx * 0.5
+        else:
+            e[i] = e[i - 1] + (rho[i - 1] + rho[i]) * dx * 0.5
     s = 0.0
     for i in e:
         s += e[i].x
     for i in e:
         e[i] += -s / ng
-    for p in v:  #G2P
+    for p in v:  # G2P
         base = (x[p] * inv_dx - 0.5).cast(int)
         fx = x[p] * inv_dx - 0.5 - base.cast(float)
-        a = (e[base] *
-             (1.0 - fx) + e[base + 1] * fx) * qm  # compute electric force
+        a = e[base] * (1.0 - fx) * qm
+        if base[0] < ng - 1:
+            a += e[base + 1] * fx * qm  # compute electric force
         v[p] += a * dt
 
 
@@ -84,10 +89,10 @@ def main():
         for s in range(substepping):
             substep()
         vx_pos()
-        gui.circles(v_x_pos1.to_numpy(), color=0x0000ff, radius=2)
-        gui.circles(v_x_pos2.to_numpy(), color=0xff0000, radius=2)
+        gui.circles(v_x_pos1.to_numpy(), color=0x0000FF, radius=2)
+        gui.circles(v_x_pos2.to_numpy(), color=0xFF0000, radius=2)
         gui.show()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

@@ -14,7 +14,7 @@ def test_ad_if_simple():
 
     @ti.kernel
     def func():
-        if x[None] > 0.:
+        if x[None] > 0.0:
             y[None] = x[None]
 
     x[None] = 1
@@ -149,8 +149,7 @@ def test_ad_if_parallel():
     assert x.grad[1] == 1
 
 
-@test_utils.test(require=[ti.extension.adstack, ti.extension.data64],
-                 default_fp=ti.f64)
+@test_utils.test(require=[ti.extension.adstack, ti.extension.data64], default_fp=ti.f64)
 def test_ad_if_parallel_f64():
     x = ti.field(ti.f64, shape=2)
     y = ti.field(ti.f64, shape=2)
@@ -206,8 +205,7 @@ def test_ad_if_parallel_complex():
     assert x.grad[1] == -0.25
 
 
-@test_utils.test(require=[ti.extension.adstack, ti.extension.data64],
-                 default_fp=ti.f64)
+@test_utils.test(require=[ti.extension.adstack, ti.extension.data64], default_fp=ti.f64)
 def test_ad_if_parallel_complex_f64():
     x = ti.field(ti.f64, shape=2)
     y = ti.field(ti.f64, shape=2)
@@ -244,9 +242,7 @@ def test_stack():
     func()
 
 
-# FIXME: There is no tensor constant (brought by dynamic index) until the whole mat/vec refactor is done, which will potentially break the adstack.
-# Temporially disable the dynamic index, will make workaround to handle tensor constant in other PRs
-@test_utils.test(dynamic_index=False)
+@test_utils.test()
 def test_if_condition_depend_on_for_loop_index():
     scalar = lambda: ti.field(dtype=ti.f32)
     vec = lambda: ti.Vector.field(3, dtype=ti.f32)

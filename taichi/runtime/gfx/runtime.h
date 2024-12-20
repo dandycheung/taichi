@@ -7,11 +7,11 @@
 #include "taichi/rhi/device.h"
 #include "taichi/codegen/spirv/snode_struct_compiler.h"
 #include "taichi/codegen/spirv/kernel_utils.h"
-#include "taichi/codegen/spirv/spirv_codegen.h"
 #include "taichi/program/compile_config.h"
 #include "taichi/struct/snode_tree.h"
 #include "taichi/program/snode_expr_utils.h"
 #include "taichi/program/program_impl.h"
+#include "taichi/program/kernel_launcher.h"
 
 namespace taichi::lang {
 namespace gfx {
@@ -43,9 +43,11 @@ class CompiledTaichiKernel {
     std::vector<DeviceAllocation *> root_buffers;
     DeviceAllocation *global_tmps_buffer{nullptr};
     DeviceAllocation *listgen_buffer{nullptr};
+
+    PipelineCache *backend_cache{nullptr};
   };
 
-  CompiledTaichiKernel(const Params &ti_params);
+  explicit CompiledTaichiKernel(const Params &ti_params);
 
   const TaichiKernelAttributes &ti_kernel_attribs() const;
 
@@ -76,19 +78,15 @@ class CompiledTaichiKernel {
 class TI_DLL_EXPORT GfxRuntime {
  public:
   struct Params {
-    uint64_t *host_result_buffer{nullptr};
     Device *device{nullptr};
+    KernelProfilerBase *profiler{nullptr};
   };
 
   explicit GfxRuntime(const Params &params);
   // To make Pimpl + std::unique_ptr work
   ~GfxRuntime();
 
-  class KernelHandle {
-   private:
-    friend class GfxRuntime;
-    int id_ = -1;
-  };
+  using KernelHandle = KernelLauncher::Handle;
 
   struct RegisterParams {
     TaichiKernelAttributes kernel_attribs;
@@ -98,7 +96,7 @@ class TI_DLL_EXPORT GfxRuntime {
 
   KernelHandle register_taichi_kernel(RegisterParams params);
 
-  void launch_kernel(KernelHandle handle, RuntimeContext *host_ctx);
+  void launch_kernel(KernelHandle handle, LaunchContextBuilder &host_ctx);
 
   void buffer_copy(DevicePtr dst, DevicePtr src, size_t size);
   void copy_image(DeviceAllocation dst,
@@ -109,10 +107,6 @@ class TI_DLL_EXPORT GfxRuntime {
   void track_image(DeviceAllocation image, ImageLayout layout);
   void untrack_image(DeviceAllocation image);
   void transition_image(DeviceAllocation image, ImageLayout layout);
-
-  void signal_event(DeviceEvent *event);
-  void reset_event(DeviceEvent *event);
-  void wait_event(DeviceEvent *event);
 
   void synchronize();
 
@@ -130,6 +124,18 @@ class TI_DLL_EXPORT GfxRuntime {
       std::function<void(Device *device, CommandList *cmdlist)> op,
       const std::vector<ComputeOpImageRef> &image_refs);
 
+  bool used_in_kernel(DeviceAllocationId id) {
+    return ndarrays_in_use_.count(id) > 0 || argpacks_in_use_.count(id) > 0;
+  }
+
+  static std::pair<const lang::StructType *, size_t>
+  get_struct_type_with_data_layout(const lang::StructType *old_ty,
+                                   const std::string &layout);
+
+  static std::tuple<const lang::StructType *, size_t, size_t>
+  get_struct_type_with_data_layout_impl(const lang::StructType *old_ty,
+                                        const std::string &layout);
+
  private:
   friend class taichi::lang::gfx::SNodeTreeManager;
 
@@ -139,7 +145,9 @@ class TI_DLL_EXPORT GfxRuntime {
   void init_nonroot_buffers();
 
   Device *device_{nullptr};
-  uint64_t *const host_result_buffer_;
+  KernelProfilerBase *profiler_;
+
+  std::unique_ptr<PipelineCache> backend_cache_{nullptr};
 
   std::vector<std::unique_ptr<DeviceAllocationGuard>> root_buffers_;
   std::unique_ptr<DeviceAllocationGuard> global_tmps_buffer_;
@@ -155,12 +163,21 @@ class TI_DLL_EXPORT GfxRuntime {
 
   std::unordered_map<DeviceAllocation *, size_t> root_buffers_size_map_;
   std::unordered_map<DeviceAllocationId, ImageLayout> last_image_layouts_;
+  // [Note] Why do we need to track ndarrays that are in use?
+  // Since we separate cmdlist is async, taichi needs a way to know whether
+  // ndarrays are still used by pending kernels to be executed. So we use
+  // ndarray_in_use_ to track this so that we can free memory allocated for
+  // ndarray whenever it's safe to do so.
+  std::unordered_set<DeviceAllocationId> ndarrays_in_use_;
+  std::unordered_set<DeviceAllocationId> argpacks_in_use_;
 };
 
 GfxRuntime::RegisterParams run_codegen(
     Kernel *kernel,
-    Device *device,
-    const std::vector<CompiledSNodeStructs> &compiled_structs);
+    Arch arch,
+    const DeviceCapabilityConfig &caps,
+    const std::vector<CompiledSNodeStructs> &compiled_structs,
+    const CompileConfig &compile_config);
 
 }  // namespace gfx
 }  // namespace taichi::lang

@@ -15,6 +15,7 @@ PER_STATEMENT(WhileStmt)
 PER_STATEMENT(WhileControlStmt)
 PER_STATEMENT(ContinueStmt)
 PER_STATEMENT(FuncCallStmt)
+PER_STATEMENT(GetElementStmt)
 PER_STATEMENT(ReturnStmt)
 
 PER_STATEMENT(ArgLoadStmt)
@@ -38,6 +39,7 @@ PER_STATEMENT(LoopUniqueStmt)
 PER_STATEMENT(AssertStmt)
 PER_STATEMENT(ExternalFuncCallStmt)
 PER_STATEMENT(ExternalTensorShapeAlongAxisStmt)
+PER_STATEMENT(ExternalTensorBasePtrStmt)
 PER_STATEMENT(MatrixInitStmt)
 
 // Locals with reverse-mode autodiff
@@ -51,7 +53,6 @@ PER_STATEMENT(AdStackAccAdjointStmt)
 // SNode Micro Ops
 PER_STATEMENT(GetRootStmt)
 PER_STATEMENT(IntegerOffsetStmt)
-PER_STATEMENT(BitExtractStmt)
 PER_STATEMENT(LinearizeStmt)
 PER_STATEMENT(SNodeLookupStmt)
 PER_STATEMENT(GetChStmt)
@@ -60,6 +61,7 @@ PER_STATEMENT(GetChStmt)
 PER_STATEMENT(LocalLoadStmt)
 PER_STATEMENT(GlobalPtrStmt)
 PER_STATEMENT(MatrixOfGlobalPtrStmt)
+PER_STATEMENT(MatrixOfMatrixPtrStmt)
 
 // Offloaded
 PER_STATEMENT(OffloadedStmt)

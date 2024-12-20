@@ -16,7 +16,6 @@ TEST(Scalarize, ScalarizeGlobalStore) {
   auto func = []() {};
   auto kernel =
       std::make_unique<Kernel>(*test_prog.prog(), func, "fake_kernel");
-  block->kernel = kernel.get();
 
   auto &type_factory = TypeFactory::get_instance();
 
@@ -29,7 +28,12 @@ TEST(Scalarize, ScalarizeGlobalStore) {
       {2, 2}, type_factory.get_primitive_type(PrimitiveTypeID::i32));
   auto const_1_stmt = block->push_back<ConstStmt>(TypedConstant(1));
   auto const_2_stmt = block->push_back<ConstStmt>(TypedConstant(2));
-  auto argload_stmt = block->push_back<ArgLoadStmt>(0 /*arg_id*/, tensor_type);
+  auto type =
+      TypeFactory::get_instance().get_ndarray_struct_type(tensor_type, 1);
+
+  auto argload_stmt = block->push_back<ArgLoadStmt>(
+      std::vector<int>{0} /*arg_id*/, type, /*is_ptr*/ true,
+      /*create_load*/ false, /*arg_depth*/ 0);
 
   std::vector<Stmt *> indices = {};
   Stmt *dest_stmt = block->push_back<ExternalPtrStmt>(
@@ -79,7 +83,6 @@ TEST(Scalarize, ScalarizeGlobalLoad) {
   auto func = []() {};
   auto kernel =
       std::make_unique<Kernel>(*test_prog.prog(), func, "fake_kernel");
-  block->kernel = kernel.get();
 
   auto &type_factory = TypeFactory::get_instance();
 
@@ -90,7 +93,12 @@ TEST(Scalarize, ScalarizeGlobalLoad) {
   */
   Type *tensor_type = type_factory.get_tensor_type(
       {2, 2}, type_factory.get_primitive_type(PrimitiveTypeID::i32));
-  auto argload_stmt = block->push_back<ArgLoadStmt>(0 /*arg_id*/, tensor_type);
+  auto type =
+      TypeFactory::get_instance().get_ndarray_struct_type(tensor_type, 1);
+
+  auto argload_stmt = block->push_back<ArgLoadStmt>(
+      std::vector<int>{0} /*arg_id*/, type, /*is_ptr*/ true,
+      /*create_load*/ false, /*arg_depth*/ 0);
 
   std::vector<Stmt *> indices = {};
   Stmt *src_stmt = block->push_back<ExternalPtrStmt>(
@@ -138,7 +146,6 @@ TEST(Scalarize, ScalarizeLocalStore) {
   auto func = []() {};
   auto kernel =
       std::make_unique<Kernel>(*test_prog.prog(), func, "fake_kernel");
-  block->kernel = kernel.get();
 
   auto &type_factory = TypeFactory::get_instance();
 
@@ -193,7 +200,6 @@ TEST(Scalarize, ScalarizeLocalLoad) {
   auto func = []() {};
   auto kernel =
       std::make_unique<Kernel>(*test_prog.prog(), func, "fake_kernel");
-  block->kernel = kernel.get();
 
   auto &type_factory = TypeFactory::get_instance();
 

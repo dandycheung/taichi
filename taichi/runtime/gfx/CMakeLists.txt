@@ -7,6 +7,7 @@ target_sources(gfx_runtime
     snode_tree_manager.cpp
     aot_module_builder_impl.cpp
     aot_module_loader_impl.cpp
+    kernel_launcher.cpp
   )
 #TODO 4832, some dependencies here should not be required as they
 # are build requirements of other targets.
@@ -20,3 +21,4 @@ target_include_directories(gfx_runtime
     ${PROJECT_SOURCE_DIR}/external/spdlog/include
         ${LLVM_INCLUDE_DIRS}
   )
+target_link_libraries(gfx_runtime PRIVATE taichi_common)

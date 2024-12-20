@@ -91,6 +91,7 @@ std::string atomic_op_type_name(AtomicOpType type) {
     return #i;
 
     REGISTER_TYPE(add);
+    REGISTER_TYPE(mul);
     REGISTER_TYPE(sub);
     REGISTER_TYPE(max);
     REGISTER_TYPE(min);
@@ -136,6 +137,7 @@ std::string snode_op_type_name(SNodeOpType type) {
     REGISTER_TYPE(activate);
     REGISTER_TYPE(deactivate);
     REGISTER_TYPE(append);
+    REGISTER_TYPE(allocate);
     REGISTER_TYPE(clear);
     REGISTER_TYPE(undefined);
 

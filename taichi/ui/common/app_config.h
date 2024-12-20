@@ -15,9 +15,10 @@ struct AppConfig {
   int window_pos_y{0};
   bool vsync{false};
   bool show_window{true};
+  double fps_limit{1000.0};
   std::string package_path;
   Arch ti_arch;
-  bool is_packed_mode{false};
+  Arch ggui_arch{Arch::vulkan};
 };
 
 }  // namespace ui

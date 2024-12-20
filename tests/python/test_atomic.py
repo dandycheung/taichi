@@ -1,3 +1,5 @@
+import pytest
+
 import taichi as ti
 from tests import test_utils
 
@@ -29,7 +31,7 @@ def run_atomic_add_global_case(vartype, step, valproc=lambda x: x):
     x_actual = sorted(x.to_numpy())
     y_actual = sorted(y.to_numpy())
     expect = [i * step for i in range(n)]
-    for (xa, ya, e) in zip(x_actual, y_actual, expect):
+    for xa, ya, e in zip(x_actual, y_actual, expect):
         print(xa, ya, e)
         assert valproc(xa) == e
         assert valproc(ya) == e
@@ -42,8 +44,7 @@ def test_atomic_add_global_i32():
 
 @test_utils.test()
 def test_atomic_add_global_f32():
-    run_atomic_add_global_case(
-        ti.f32, 4.2, valproc=lambda x: test_utils.approx(x, rel=1e-5))
+    run_atomic_add_global_case(ti.f32, 4.2, valproc=lambda x: test_utils.approx(x, rel=1e-5))
 
 
 @test_utils.test(arch=[ti.cpu, ti.cuda])
@@ -283,6 +284,25 @@ def test_atomic_sub_expr_evaled():
 
 
 @test_utils.test()
+def test_atomic_mul_expr_evaled():
+    c = ti.field(ti.i32)
+    base = 2
+
+    ti.root.place(c)
+
+    @ti.kernel
+    def func():
+        c[None] = 1
+        for i in range(16):
+            # this is an expr with side effect, make sure it's not optimized out.
+            ti.atomic_mul(c[None], base)
+
+    func()
+
+    assert c[None] == base**16
+
+
+@test_utils.test()
 def test_atomic_max_expr_evaled():
     c = ti.field(ti.i32)
     step = 42
@@ -376,3 +396,43 @@ def test_atomic_xor_expr_evaled():
     func()
 
     assert c[None] == 0
+
+
+@test_utils.test()
+def test_atomic_min_rvalue_as_frist_op():
+    @ti.kernel
+    def func():
+        y = ti.Vector([1, 2, 3])
+        z = ti.atomic_min([3, 2, 1], y)
+
+    with pytest.raises(ti.TaichiSyntaxError) as e:
+        func()
+
+    assert "atomic_min" in str(e.value)
+    assert "cannot use a non-writable target as the first operand of" in str(e.value)
+
+
+@test_utils.test()
+def test_atomic_max_f32():
+    @ti.kernel
+    def max_kernel() -> ti.f32:
+        x = -1000.0
+        for i in range(1, 20):
+            ti.atomic_max(x, -ti.f32(i))
+
+        return x
+
+    assert max_kernel() == -1.0
+
+
+@test_utils.test()
+def test_atomic_mul_f32():
+    @ti.kernel
+    def mul_kernel() -> ti.f32:
+        x = 1.0
+        for i in range(1, 8):
+            ti.atomic_mul(x, ti.f32(i))
+
+        return x
+
+    assert mul_kernel() == 5040.0

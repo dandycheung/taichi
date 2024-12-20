@@ -4,8 +4,6 @@
 #include <unordered_map>
 #include <mutex>
 
-#include "taichi/util/lang_util.h"
-#include "taichi/program/program.h"
 #include "taichi/system/threading.h"
 #include "taichi/rhi/cuda/cuda_driver.h"
 #include "taichi/rhi/cuda/cuda_profiler.h"
@@ -14,7 +12,9 @@
 namespace taichi::lang {
 
 CUDAContext::CUDAContext()
-    : profiler_(nullptr), driver_(CUDADriver::get_instance_without_context()) {
+    : profiler_(nullptr),
+      driver_(CUDADriver::get_instance_without_context()),
+      stream_(nullptr) {
   // CUDA initialization
   dev_count_ = 0;
   driver_.init(0);
@@ -32,6 +32,36 @@ CUDAContext::CUDAContext()
   driver_.device_get_attribute(
       &cc_minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, device_);
 
+  int device_supports_mem_pool = 0;
+  if (driver_.get_version_major() > 11 ||
+      (driver_.get_version_major() == 11 && driver_.get_version_minor() >= 2)) {
+    driver_.device_get_attribute(&device_supports_mem_pool,
+                                 CU_DEVICE_ATTRIBUTE_MEMORY_POOLS_SUPPORTED,
+                                 device_);
+  } else {
+    TI_WARN(
+        "Please consider upgrade your nvidia driver for better device memory "
+        "pool"
+        "support. Current driver supports CUDA {}.{}, we recommend driver "
+        "version"
+        "above 470 (CUDA 11.2).",
+        driver_.get_version_major(), driver_.get_version_minor());
+    device_supports_mem_pool = 0;
+  }
+
+  if (device_supports_mem_pool) {
+    supports_mem_pool_ = true;
+    void *default_mem_pool;
+    driver_.device_get_default_mem_pool(&default_mem_pool, device_);
+    // Let the memory pool have 128MB
+    // TODO: make this configurable after we let the memory pool replace the
+    // preallocated memory
+    constexpr uint64 kMemPoolReleaseThreshold = 1048576 * 128;
+    driver_.mem_pool_set_attribute(default_mem_pool,
+                                   CU_MEMPOOL_ATTR_RELEASE_THRESHOLD,
+                                   (void *)&kMemPoolReleaseThreshold);
+  }
+
   TI_TRACE("CUDA Device Compute Capability: {}.{}", cc_major, cc_minor);
   driver_.primary_context_retain(&context_, 0);
   driver_.context_set_current(context_);
@@ -42,12 +72,13 @@ CUDAContext::CUDAContext()
 
   compute_capability_ = cc_major * 10 + cc_minor;
 
-  if (compute_capability_ > 75) {
-    // The NVPTX backend of LLVM 10.0.0 does not seem to support
-    // compute_capability > 75 yet. See
-    // llvm-10.0.0.src/build/lib/Target/NVPTX/NVPTXGenSubtargetInfo.inc
-    compute_capability_ = 75;
+  if (compute_capability_ > 86) {
+    compute_capability_ = 86;
   }
+
+  driver_.device_get_attribute(
+      &max_shared_memory_bytes_,
+      CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN, device_);
 
   mcpu_ = fmt::format("sm_{}", compute_capability_);
 
@@ -77,6 +108,7 @@ std::string CUDAContext::get_device_name() {
 void CUDAContext::launch(void *func,
                          const std::string &task_name,
                          std::vector<void *> arg_pointers,
+                         std::vector<int> arg_sizes,
                          unsigned grid_dim,
                          unsigned block_dim,
                          std::size_t dynamic_shared_mem_bytes) {
@@ -114,15 +146,26 @@ void CUDAContext::launch(void *func,
 
   if (grid_dim > 0) {
     std::lock_guard<std::mutex> _(lock_);
+    if (dynamic_shared_mem_bytes > 0) {
+      if (dynamic_shared_mem_bytes > max_shared_memory_bytes_) {
+        TI_ERROR(
+            "Requested dynamic shared memory size of {} bytes, but the device "
+            "supports max capacity of {} bytes.",
+            dynamic_shared_mem_bytes, max_shared_memory_bytes_);
+      }
+      driver_.kernel_set_attribute(
+          func, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
+          dynamic_shared_mem_bytes);
+    }
     driver_.launch_kernel(func, grid_dim, 1, 1, block_dim, 1, 1,
-                          dynamic_shared_mem_bytes, nullptr,
+                          dynamic_shared_mem_bytes, stream_,
                           arg_pointers.data(), nullptr);
   }
   if (profiler_)
     profiler_->stop(task_handle);
 
   if (debug_) {
-    driver_.stream_synchronize(nullptr);
+    driver_.stream_synchronize(stream_);
   }
 }
 
